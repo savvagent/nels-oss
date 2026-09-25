@@ -59,3 +59,10 @@ export function providerRetired(view) {
     !(view?.available_providers ?? []).includes(view.provider)
   );
 }
+
+// A free (unpaid) Google AI Studio key falls under Google's unpaid-service
+// terms, which let Google use prompts and responses to improve its products.
+// The note shows only in the own-key branch while Gemini is selected.
+export function showsGeminiFreeTierNote(choice, provider) {
+  return choice === "own" && provider === "gemini";
+}

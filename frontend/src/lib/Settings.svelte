@@ -21,6 +21,7 @@
     canSave,
     embeddingsNoteVisible,
     providerRetired,
+    showsGeminiFreeTierNote,
   } from "./aiProviderView.js";
 
   let {
@@ -362,6 +363,9 @@
               </a>
             {/if}
           </p>
+          {#if showsGeminiFreeTierNote(aiChoice, aiProvider)}
+            <p class="text-xs text-base-content/70">{$_("aiProvider.geminiFreeTierNote")}</p>
+          {/if}
           <div class="flex gap-2">
             <button
               type="button"

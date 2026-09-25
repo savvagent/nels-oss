@@ -7,6 +7,7 @@ import {
   providerErrorKey,
   embeddingsNoteVisible,
   providerRetired,
+  showsGeminiFreeTierNote,
 } from "./aiProviderView.js";
 
 describe("aiProviderView", () => {
@@ -57,5 +58,14 @@ describe("aiProviderView", () => {
     expect(embeddingsNoteVisible({ mode: "byo", embeddings_enabled: false })).toBe(true);
     expect(embeddingsNoteVisible({ mode: "byo", embeddings_enabled: true })).toBe(false);
     expect(embeddingsNoteVisible({ mode: "nels", embeddings_enabled: true })).toBe(false);
+  });
+
+  it("shows the Gemini free-tier note only for an own Gemini key", () => {
+    expect(showsGeminiFreeTierNote("own", "gemini")).toBe(true);
+    expect(showsGeminiFreeTierNote("own", "openai")).toBe(false);
+    expect(showsGeminiFreeTierNote("own", "anthropic")).toBe(false);
+    expect(showsGeminiFreeTierNote("own", "")).toBe(false);
+    expect(showsGeminiFreeTierNote("nels", "gemini")).toBe(false);
+    expect(showsGeminiFreeTierNote(undefined, "gemini")).toBe(false);
   });
 });
