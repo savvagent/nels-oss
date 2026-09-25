@@ -15,7 +15,7 @@ EVAL_PROVIDER=anthropic EVAL_API_KEY=sk-ant-... cargo test --bin backend live_ch
 EVAL_PROVIDER=gemini    EVAL_API_KEY=AIza...    cargo test --bin backend live_chat_action_eval -- --ignored --nocapture
 ```
 
-Each run makes one paid call per fixture (about 55) and writes `docs/evals/<date>-<provider>-<model>.md`. Commit that file.
+Each run makes one paid call per fixture (53 today) and writes `docs/evals/<date>-<provider>-<model>.md`. Commit that file. The file is rewritten after every call, so an interrupted run keeps what it already paid for. Only commit a file whose `Fixtures:` count equals the number of lines in `backend/evals/chat_actions.jsonl`; a partial run can show `Gate: PASS` on too few fixtures.
 
 To evaluate a non-default model, set the matching `LLM_MODEL_GEMINI`, `LLM_MODEL_OPENAI` or `LLM_MODEL_ANTHROPIC` for the run. The model name goes into the results file name.
 

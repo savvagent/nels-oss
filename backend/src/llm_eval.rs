@@ -72,7 +72,7 @@ pub(crate) fn load_context() -> EvalContext {
 /// booleans exactly. Anything else (including a missing param) is a miss.
 fn value_matches(want: &Value, got: Option<&Value>) -> bool {
     match (want, got) {
-        (Value::String(w), Some(Value::String(g))) => w.trim().eq_ignore_ascii_case(g.trim()),
+        (Value::String(w), Some(Value::String(g))) => w.trim().to_lowercase() == g.trim().to_lowercase(),
         (Value::Number(w), Some(Value::Number(g))) => {
             (w.as_f64().unwrap_or(f64::NAN) - g.as_f64().unwrap_or(f64::NAN)).abs() < 0.01
         }
@@ -133,6 +133,11 @@ async fn live_chat_action_eval() {
     let creds = LlmCredentials::new(provider, key.trim().to_string(), KeySource::Byo);
     let ctx = load_context();
     let system = crate::rag::build_system_instructions(&ctx.as_prompt());
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    let dir = format!("{}/../docs/evals", env!("CARGO_MANIFEST_DIR"));
+    let model_slug = creds.model.replace(['/', ':'], "-");
+    let path = format!("{dir}/{date}-{}-{model_slug}.md", provider.as_str());
+    std::fs::create_dir_all(&dir).unwrap();
     let mut outcomes = Vec::new();
     for fx in load_fixtures() {
         // Same user framing and 30s timeout as rag.rs's chat_endpoint.
@@ -156,13 +161,11 @@ async fn live_chat_action_eval() {
             eprintln!("{} FAIL {:?}\n  raw: {}", fx.id, o, raw.chars().take(400).collect::<String>());
         }
         outcomes.push((fx.id.clone(), o));
+        // Rewrite the report after every paid call, so an interrupted run keeps
+        // the results it already paid for (the file then covers fewer fixtures).
+        std::fs::write(&path, report(provider.as_str(), &creds.model, &outcomes)).unwrap();
     }
     let md = report(provider.as_str(), &creds.model, &outcomes);
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    let dir = format!("{}/../docs/evals", env!("CARGO_MANIFEST_DIR"));
-    let model_slug = creds.model.replace(['/', ':'], "-");
-    let path = format!("{dir}/{date}-{}-{model_slug}.md", provider.as_str());
-    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(&path, &md).unwrap();
     println!("{md}\nwritten to {path}");
 }
@@ -246,5 +249,6 @@ mod tests {
         assert!(md.contains("Action accuracy: 50.0%"));
         assert!(md.contains("Gate: FAIL"));
         assert!(md.contains("| b |"));
+        assert!(!md.contains("| a |"), "passing fixtures must not be listed as failures");
     }
 }
