@@ -10,7 +10,7 @@
   import Section from '$lib/components/Section.svelte';
   import { SITE } from '$lib/site.js';
 
-  const updated = 'July 7, 2026';
+  const updated = 'September 25, 2026';
 </script>
 
 <Seo
@@ -47,12 +47,34 @@
     </ul>
 
     <h2>AI processing</h2>
-    <p>{SITE.name} uses third-party large-language-model providers — currently Google's Gemini API, and potentially other AI providers over time — to interpret your messages and generate responses, categorizations, and insights. To do this, the relevant budget data and conversation content are sent to the provider for processing. We send only what is needed to answer your request, and we do not permit these providers to use your data to train their models beyond what is necessary to return a response. We do not sell your data and we do not build advertising profiles.</p>
+    <p>{SITE.name} uses third-party large-language-model providers to interpret your messages and generate responses, categorizations, and insights. We send only what is needed to answer your request. We do not sell your data and we do not build advertising profiles.</p>
+    <p>
+      By default, {SITE.name} sends the text needed to answer your chat messages (your message
+      plus relevant budget details) to Google's Gemini API under {SITE.name}'s paid account.
+      Google's Gemini API terms for paid services govern how Google handles that data;
+      see <a href="https://ai.google.dev/gemini-api/terms">Google's Gemini API terms</a>.
+      Those terms state that for paid services Google "doesn't use your prompts (including
+      associated system instructions, cached content, and files such as images, videos, or
+      documents) or responses to improve our products", and that "Google logs prompts and
+      responses for a limited period of time, solely for detecting and preventing violations
+      of the Prohibited Use Policy to maintain the safety and security of the Services, and
+      any required legal or regulatory disclosures."
+    </p>
+    <p>
+      You can instead use your own API key for Google Gemini, OpenAI or Anthropic in
+      Settings → AI provider. Your requests then go to that provider under your own
+      account and your own agreement with them (for example
+      <a href="https://developers.openai.com/api/docs/guides/your-data">OpenAI's API data controls</a>),
+      and {SITE.name} stores your key encrypted.
+      In every case {SITE.name}'s servers build each request from your data, so {SITE.name} still
+      processes it; your own key changes who receives it, not whether {SITE.name} sees it.
+      Chats about a budget someone has shared with you use your own provider choice, not the budget owner's.
+    </p>
 
     <h2>Who we share data with</h2>
     <p>We do not sell your personal information. We share data only with service providers ("subprocessors") that help us run {SITE.name}, under contracts that limit their use of it:</p>
     <ul>
-      <li><strong>AI providers (currently Google's Gemini API)</strong> — AI processing of your prompts and budget context.</li>
+      <li><strong>AI providers: Google (Gemini API) by default; OpenAI or Anthropic only if you choose them with your own key</strong> — AI processing of your prompts and budget context.</li>
       <li><strong>Stripe</strong> — subscription billing, payment processing, and bank account connections (Stripe Financial Connections). When you link a bank account, you interact with Stripe directly and Stripe collects information from you and your financial institution under its own <a href="https://stripe.com/privacy">privacy policy</a>. If we add bank connections for other regions, we will use comparable regulated providers and update this policy.</li>
       <li><strong>Fly.io</strong> — application hosting.</li>
       <li><strong>Managed PostgreSQL hosting</strong> — storage of your account and budget data, encrypted at rest.</li>
