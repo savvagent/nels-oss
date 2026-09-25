@@ -27,6 +27,7 @@ mod reports;
 mod r#rag;
 mod github;
 mod usage;
+mod llm;
 mod backfill;
 mod billing;
 mod financial_connections;
