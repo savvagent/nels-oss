@@ -628,7 +628,10 @@ pub(crate) fn resolve_from(
             KeySource::Nels,
         ))),
         Ok(Some((provider, blob))) => {
-            let provider = Provider::parse(&provider).ok_or(LlmError::KeyUnavailable)?;
+            let provider = Provider::parse(&provider).ok_or_else(|| {
+                tracing::error!(provider = %provider, "stored BYO provider is unrecognized");
+                LlmError::KeyUnavailable
+            })?;
             let key = cipher.decrypt(&blob).map_err(|e| {
                 tracing::error!(provider = provider.as_str(), "stored BYO key failed to decrypt: {}", e);
                 LlmError::KeyUnavailable
