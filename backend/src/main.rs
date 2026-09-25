@@ -195,6 +195,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "Failed to purge old issue-filing rate-limit rows"),
             }
+            match llm::purge_old_key_validation_attempts(&cleanup_pool).await {
+                Ok(n) if n > 0 => tracing::info!(cleared = n, "Purged old AI-key validation attempts"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "Failed to purge old AI-key validation attempts"),
+            }
         }
     });
 

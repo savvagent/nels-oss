@@ -607,6 +607,185 @@ pub async fn embed(
     gemini_embed(creds, text).await.map(Some)
 }
 
+// ---------- credential resolution & usage accounting ----------
+
+use sqlx::{PgPool, Row};
+use uuid::Uuid;
+
+/// Pure decision table (spec §5.1). `row` is the lookup result: `Err(())` means
+/// the SELECT failed, which must NEVER be treated as "no row" (spec A8).
+pub(crate) fn resolve_from(
+    row: Result<Option<(String, String)>, ()>,
+    cipher: &crate::crypto::SecretCipher,
+    nels_key: &str,
+) -> Result<Resolved, LlmError> {
+    match row {
+        Err(()) => Err(LlmError::KeyUnavailable),
+        Ok(None) if nels_key.is_empty() => Ok(Resolved::Offline),
+        Ok(None) => Ok(Resolved::Llm(LlmCredentials::new(
+            Provider::Gemini,
+            nels_key.to_string(),
+            KeySource::Nels,
+        ))),
+        Ok(Some((provider, blob))) => {
+            let provider = Provider::parse(&provider).ok_or(LlmError::KeyUnavailable)?;
+            let key = cipher.decrypt(&blob).map_err(|e| {
+                tracing::error!(provider = provider.as_str(), "stored BYO key failed to decrypt: {}", e);
+                LlmError::KeyUnavailable
+            })?;
+            Ok(Resolved::Llm(LlmCredentials::new(provider, key, KeySource::Byo)))
+        }
+    }
+}
+
+/// Resolve which credentials a request made on behalf of `user_id` must use.
+/// Call once per request and pass `&Resolved` down (spec §5.1).
+pub async fn resolve_for_user(
+    db: &PgPool,
+    cipher: &crate::crypto::SecretCipher,
+    user_id: Uuid,
+) -> Result<Resolved, LlmError> {
+    let row = sqlx::query("SELECT provider, encrypted_key FROM user_ai_providers WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await
+        .map(|o| o.map(|r| (r.get::<String, _>("provider"), r.get::<String, _>("encrypted_key"))))
+        .map_err(|e| {
+            tracing::error!(%user_id, "ai provider lookup failed: {}", e);
+        });
+    let resolved = resolve_from(row, cipher, &nels_gemini_key());
+    if matches!(resolved, Err(LlmError::KeyUnavailable)) {
+        mark_key_unavailable(db, user_id).await;
+    }
+    resolved
+}
+
+async fn mark_key_unavailable(db: &PgPool, user_id: Uuid) {
+    let _ = sqlx::query(
+        "UPDATE user_ai_providers SET last_error = 'key_unavailable', updated_at = NOW() \
+         WHERE user_id = $1 AND last_error IS DISTINCT FROM 'key_unavailable'",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await
+    .inspect_err(|e| tracing::warn!(%user_id, "mark_key_unavailable failed: {e}"));
+}
+
+/// Fail-safe llm_usage write (replaces rag::record_llm_usage; AC #6 of #140).
+pub async fn record_usage(
+    db: &PgPool,
+    user_id: Uuid,
+    creds: &LlmCredentials,
+    model_label: &str,
+    call_type: &str,
+    usage: TokenUsage,
+) {
+    let res = sqlx::query(
+        "INSERT INTO llm_usage (id, user_id, model, call_type, input_tokens, output_tokens, thinking_tokens, total_tokens, provider, key_source) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user_id)
+    .bind(model_label)
+    .bind(call_type)
+    .bind(usage.input)
+    .bind(usage.output)
+    .bind(usage.thinking)
+    .bind(usage.total)
+    .bind(creds.provider.as_str())
+    .bind(creds.source.as_str())
+    .execute(db)
+    .await;
+    if let Err(e) = res {
+        tracing::warn!("failed to record llm_usage (user={user_id}, call_type={call_type}): {e}");
+    }
+}
+
+/// Keep `last_error` in step with runtime results for BYO keys only. An auth
+/// failure sets it; a success clears it with a guarded UPDATE, so a healthy
+/// call adds no write. Transient errors leave it untouched. Fail-safe.
+pub async fn observe(db: &PgPool, user_id: Uuid, creds: &LlmCredentials, ok: bool, err: Option<LlmError>) {
+    if creds.source != KeySource::Byo {
+        return;
+    }
+    let sql = if ok {
+        "UPDATE user_ai_providers SET last_error = NULL, updated_at = NOW() WHERE user_id = $1 AND last_error IS NOT NULL"
+    } else if err == Some(LlmError::Auth) {
+        "UPDATE user_ai_providers SET last_error = 'auth_rejected', updated_at = NOW() WHERE user_id = $1"
+    } else {
+        return;
+    };
+    if let Err(e) = sqlx::query(sql).bind(user_id).execute(db).await {
+        tracing::warn!(%user_id, "observe last_error write failed: {e}");
+    }
+}
+
+/// Label stored in llm_usage.model. Gemini keeps the historical "models/<id>" form.
+fn model_label(creds: &LlmCredentials) -> String {
+    match creds.provider {
+        Provider::Gemini => format!("models/{}", creds.model),
+        _ => creds.model.clone(),
+    }
+}
+
+pub async fn generate_json_for(
+    db: &PgPool, user_id: Uuid, creds: &LlmCredentials, call_type: &str,
+    system: &str, user: &str, timeout: Duration,
+) -> Result<String, LlmError> {
+    let res = generate_json(creds, system, user, timeout).await;
+    finish(db, user_id, creds, call_type, res).await
+}
+
+pub async fn generate_text_for(
+    db: &PgPool, user_id: Uuid, creds: &LlmCredentials, call_type: &str,
+    prompt: &str, timeout: Duration,
+) -> Result<String, LlmError> {
+    let res = generate_text(creds, prompt, timeout).await;
+    finish(db, user_id, creds, call_type, res).await
+}
+
+async fn finish(
+    db: &PgPool, user_id: Uuid, creds: &LlmCredentials, call_type: &str,
+    res: Result<LlmOutput, LlmError>,
+) -> Result<String, LlmError> {
+    match res {
+        Ok(out) => {
+            record_usage(db, user_id, creds, &model_label(creds), call_type, out.usage).await;
+            observe(db, user_id, creds, true, None).await;
+            Ok(out.text)
+        }
+        Err(e) => {
+            observe(db, user_id, creds, false, Some(e)).await;
+            Err(e)
+        }
+    }
+}
+
+/// Best-effort embedding: None when the user's provider can't embed, when
+/// resolved Offline, or on any failure. Never errors (callers store NULL).
+pub async fn embed_for(db: &PgPool, user_id: Uuid, resolved: &Resolved, text: &str) -> Option<Vec<f32>> {
+    let creds = resolved.embedder()?;
+    match embed(creds, text).await {
+        Ok(Some((v, usage))) => {
+            record_usage(db, user_id, creds, &format!("models/{EMBEDDING_MODEL}"), "embedding", usage).await;
+            observe(db, user_id, creds, true, None).await;
+            Some(v)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            observe(db, user_id, creds, false, Some(e)).await;
+            None
+        }
+    }
+}
+
+pub async fn purge_old_key_validation_attempts(db: &PgPool) -> Result<u64, sqlx::Error> {
+    sqlx::query("DELETE FROM ai_key_validation_attempts WHERE created_at < NOW() - INTERVAL '1 hour'")
+        .execute(db)
+        .await
+        .map(|r| r.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +1116,122 @@ mod tests {
         assert_eq!(validate_key(Provider::OpenAi, "o").await, Ok(()));
         assert_eq!(validate_key(Provider::Anthropic, "a").await, Ok(()));
         assert_eq!(validate_key(Provider::OpenAi, "bad").await, Err(LlmError::Auth));
+    }
+
+    fn cipher() -> crate::crypto::SecretCipher {
+        crate::auth::test_cipher()
+    }
+
+    #[test]
+    fn resolve_from_decision_table() {
+        let c = cipher();
+        // no row + nels key -> Nels Gemini
+        match resolve_from(Ok(None), &c, "nels-k").unwrap() {
+            Resolved::Llm(cr) => {
+                assert_eq!(cr.provider, Provider::Gemini);
+                assert_eq!(cr.source, KeySource::Nels);
+                assert_eq!(cr.api_key(), "nels-k");
+            }
+            Resolved::Offline => panic!("expected Llm"),
+        }
+        // no row + no nels key -> Offline
+        assert!(matches!(resolve_from(Ok(None), &c, "").unwrap(), Resolved::Offline));
+        // row decrypts -> BYO regardless of nels key
+        let blob = c.encrypt("sk-user").unwrap();
+        for nels in ["", "nels-k"] {
+            match resolve_from(Ok(Some(("openai".into(), blob.clone()))), &c, nels).unwrap() {
+                Resolved::Llm(cr) => {
+                    assert_eq!(cr.provider, Provider::OpenAi);
+                    assert_eq!(cr.source, KeySource::Byo);
+                    assert_eq!(cr.api_key(), "sk-user");
+                }
+                Resolved::Offline => panic!("expected BYO"),
+            }
+        }
+        // decrypt fails -> KeyUnavailable, never Nels
+        assert_eq!(
+            resolve_from(Ok(Some(("openai".into(), "encv1:garbage".into()))), &c, "nels-k").unwrap_err(),
+            LlmError::KeyUnavailable
+        );
+        // unknown provider literal -> KeyUnavailable
+        assert_eq!(
+            resolve_from(Ok(Some(("mistral".into(), blob))), &c, "nels-k").unwrap_err(),
+            LlmError::KeyUnavailable
+        );
+    }
+
+    #[test]
+    fn resolve_from_lookup_error_is_key_unavailable() {
+        assert_eq!(resolve_from(Err(()), &cipher(), "nels-k").unwrap_err(), LlmError::KeyUnavailable);
+    }
+
+    async fn test_pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@127.0.0.1:6153/budget_rag".into()
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn mk_user(db: &sqlx::PgPool) -> uuid::Uuid {
+        let uid = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+            .bind(uid).bind(format!("llm-{uid}@test.example"))
+            .execute(db).await.unwrap();
+        uid
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn resolve_for_user_reads_encrypted_row_and_usage_is_tagged() {
+        let db = test_pool().await;
+        let c = cipher();
+        let uid = mk_user(&db).await;
+        sqlx::query("INSERT INTO user_ai_providers (user_id, provider, encrypted_key, key_last4, last_verified_at) VALUES ($1,'anthropic',$2,'wxyz',NOW())")
+            .bind(uid).bind(c.encrypt("ak-wxyz").unwrap())
+            .execute(&db).await.unwrap();
+        let r = resolve_for_user(&db, &c, uid).await.unwrap();
+        let creds = r.creds().unwrap().clone();
+        assert_eq!(creds.provider, Provider::Anthropic);
+        record_usage(&db, uid, &creds, &creds.model, "chat", TokenUsage { input: 1, output: 2, thinking: 0, total: 3 }).await;
+        let (p, s): (String, String) = sqlx::query_as("SELECT provider, key_source FROM llm_usage WHERE user_id=$1")
+            .bind(uid).fetch_one(&db).await.unwrap();
+        assert_eq!((p.as_str(), s.as_str()), ("anthropic", "byo"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn observe_sets_and_clears_last_error_only_for_byo() {
+        let db = test_pool().await;
+        let c = cipher();
+        let uid = mk_user(&db).await;
+        sqlx::query("INSERT INTO user_ai_providers (user_id, provider, encrypted_key, key_last4, last_verified_at) VALUES ($1,'openai',$2,'1234',NOW())")
+            .bind(uid).bind(c.encrypt("sk-1234").unwrap())
+            .execute(&db).await.unwrap();
+        let byo = LlmCredentials::new(Provider::OpenAi, "sk-1234".into(), KeySource::Byo);
+        observe(&db, uid, &byo, false, Some(LlmError::Auth)).await;
+        let e: Option<String> = sqlx::query_scalar("SELECT last_error FROM user_ai_providers WHERE user_id=$1")
+            .bind(uid).fetch_one(&db).await.unwrap();
+        assert_eq!(e.as_deref(), Some("auth_rejected"));
+        observe(&db, uid, &byo, false, Some(LlmError::RateLimited)).await; // transient: unchanged
+        observe(&db, uid, &byo, true, None).await;
+        let e: Option<String> = sqlx::query_scalar("SELECT last_error FROM user_ai_providers WHERE user_id=$1")
+            .bind(uid).fetch_one(&db).await.unwrap();
+        assert_eq!(e, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn purge_removes_attempts_older_than_an_hour() {
+        let db = test_pool().await;
+        let uid = mk_user(&db).await;
+        sqlx::query("INSERT INTO ai_key_validation_attempts (id, user_id, created_at) VALUES ($1,$2,NOW() - INTERVAL '2 hours'), ($3,$2,NOW())")
+            .bind(uuid::Uuid::new_v4()).bind(uid).bind(uuid::Uuid::new_v4())
+            .execute(&db).await.unwrap();
+        purge_old_key_validation_attempts(&db).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ai_key_validation_attempts WHERE user_id=$1")
+            .bind(uid).fetch_one(&db).await.unwrap();
+        assert_eq!(n, 1);
     }
 }
