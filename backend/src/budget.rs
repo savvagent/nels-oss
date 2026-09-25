@@ -4070,16 +4070,15 @@ pub async fn create_transaction(
     let date = payload.transaction_date.unwrap_or_else(Utc::now);
 
     // Generate a semantic embedding for the description so the transaction is
-    // searchable (#195). Tolerant: with no GEMINI_API_KEY (or on any embedding
-    // failure) we insert NULL and the transaction is still created — embedding is
-    // a best-effort enrichment, never a hard requirement. The backfill job
-    // (backfill.rs) can fill NULLs later.
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let embedding = if !api_key.is_empty() {
-        crate::rag::get_gemini_embedding(&payload.description, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    // searchable (#195). Tolerant: when the caller's resolved provider cannot
+    // embed (offline, or a non-Gemini BYO key — nels-oss#3 spec A6), or on any
+    // embedding failure, we insert NULL and the transaction is still created —
+    // embedding is a best-effort enrichment, never a hard requirement. The
+    // backfill job (backfill.rs) can fill NULLs later.
+    let ai = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+        .await
+        .unwrap_or(crate::llm::Resolved::Offline);
+    let embedding = crate::llm::embed_for(&state.db, user_id, &ai, &payload.description).await;
     let embedding_str = embedding.as_ref().map(|e| crate::rag::vector_to_string(e));
 
     let transaction = sqlx::query_as::<_, Transaction>(
@@ -4199,8 +4198,11 @@ pub async fn finalize_transaction(
         ));
     };
 
+    let ai = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+        .await
+        .unwrap_or(crate::llm::Resolved::Offline);
     let tx_id = insert_transaction_with_embedding(
-        &state.db, budget_id, Some(category_id), payload.amount, &payload.description, user_id,
+        &state.db, budget_id, Some(category_id), payload.amount, &payload.description, user_id, &ai,
     )
     .await
     .map_err(|e| internal_error(format!("Failed to log transaction: {}", e)))?;
@@ -4320,17 +4322,15 @@ pub async fn update_transaction(
     // stored value reused, or a JSON-parsed copy), so no epsilon is warranted.
     let amount_changed = new_amount != existing.amount;
 
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-
     // On a description change, regenerate the embedding (best-effort, #195):
-    // on no key / failure store NULL; the backfill job repopulates. On a
-    // non-description edit, leave the embedding column untouched.
+    // when the resolved provider cannot embed, or on failure, store NULL; the
+    // backfill job repopulates. On a non-description edit, leave the embedding
+    // column untouched (and resolve nothing).
     let transaction = if description_changed {
-        let embedding = if !api_key.is_empty() {
-            crate::rag::get_gemini_embedding(&new_description, &api_key, &state.db, user_id).await
-        } else {
-            None
-        };
+        let ai = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+            .await
+            .unwrap_or(crate::llm::Resolved::Offline);
+        let embedding = crate::llm::embed_for(&state.db, user_id, &ai, &new_description).await;
         let embedding_str = embedding.as_ref().map(|e| crate::rag::vector_to_string(e));
         sqlx::query_as::<_, Transaction>(
             "UPDATE transactions SET \
@@ -4876,8 +4876,9 @@ pub(crate) async fn find_or_create_category(
 }
 
 /// Insert a transaction, generating a best-effort pgvector embedding for the
-/// description (#195). Tolerant: with no `GEMINI_API_KEY` (or on any embedding
-/// failure) the embedding is stored NULL and the transaction is still created.
+/// description (#195). Tolerant: when `ai` cannot embed (offline, or a
+/// non-Gemini BYO provider — nels-oss#3 spec A6), or on any embedding failure,
+/// the embedding is stored NULL and the transaction is still created.
 pub(crate) async fn insert_transaction_with_embedding(
     db: &PgPool,
     budget_id: Uuid,
@@ -4885,19 +4886,16 @@ pub(crate) async fn insert_transaction_with_embedding(
     amount: f64,
     description: &str,
     user_id: Uuid,
+    ai: &crate::llm::Resolved,
 ) -> Result<Uuid, sqlx::Error> {
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let embedding = if !api_key.is_empty() {
-        crate::rag::get_gemini_embedding(description, &api_key, db, user_id).await
-    } else {
-        None
-    };
-    if !api_key.is_empty() && embedding.is_none() {
-        // A key is configured but embedding came back None — the transaction is
-        // still logged (NULL embedding, backfilled later) but won't be
-        // semantically searchable until then. Surface it so a systemic embedding
-        // outage is observable rather than only manifesting as missing search hits.
-        tracing::warn!(%budget_id, "insert_transaction_with_embedding: embedding unavailable despite GEMINI_API_KEY set; storing NULL");
+    let embedding = crate::llm::embed_for(db, user_id, ai, description).await;
+    if ai.embedder().is_some() && embedding.is_none() {
+        // An embedder is available but embedding came back None — the
+        // transaction is still logged (NULL embedding, backfilled later) but
+        // won't be semantically searchable until then. Surface it so a systemic
+        // embedding outage is observable rather than only manifesting as
+        // missing search hits.
+        tracing::warn!(%budget_id, "insert_transaction_with_embedding: embedding unavailable; storing NULL");
     }
     let embedding_str = embedding.as_ref().map(|e| crate::rag::vector_to_string(e));
 
@@ -13696,8 +13694,8 @@ mod tests {
         rollup_cleanup(&pool, &[user]).await;
     }
 
-    // insert_transaction_with_embedding inserts a row (embedding NULL with no
-    // GEMINI key) with the given amount/description/category.
+    // insert_transaction_with_embedding inserts a row (embedding NULL when
+    // resolved Offline) with the given amount/description/category.
     #[tokio::test]
     #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
     async fn insert_transaction_with_embedding_inserts_row() {
@@ -13706,7 +13704,7 @@ mod tests {
         let cat_id = only_category_id(&pool, budget_id).await;
 
         let tx_id = insert_transaction_with_embedding(
-            &pool, budget_id, Some(cat_id), 42.5, "a snack", user,
+            &pool, budget_id, Some(cat_id), 42.5, "a snack", user, &crate::llm::Resolved::Offline,
         )
         .await
         .expect("insert Ok");

@@ -265,97 +265,6 @@ pub struct ChatHistoryItem {
     pub created_at: DateTime<Utc>,
 }
 
-// Gemini Embedding Structs
-#[derive(Serialize)]
-struct GeminiEmbedRequestContent {
-    parts: Vec<GeminiEmbedPart>,
-}
-
-#[derive(Serialize)]
-struct GeminiEmbedPart {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct GeminiEmbedRequest {
-    model: String,
-    content: GeminiEmbedRequestContent,
-    #[serde(rename = "outputDimensionality", skip_serializing_if = "Option::is_none")]
-    output_dimensionality: Option<u32>,
-}
-
-// Gemini usage metadata returned alongside chat/embedding responses. Missing
-// fields are treated as 0 when recording (some embedding responses omit it).
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct UsageMetadata {
-    prompt_token_count: Option<i32>,
-    candidates_token_count: Option<i32>,
-    // Thinking/reasoning tokens emitted by Gemini 2.5 models. Absent on
-    // non-thinking calls (e.g. embeddings) and older responses; treated as 0.
-    // Not counted in candidates_token_count but included in total_token_count.
-    thoughts_token_count: Option<i32>,
-    total_token_count: Option<i32>,
-}
-
-#[derive(Deserialize)]
-struct GeminiEmbedResponse {
-    embedding: GeminiEmbeddingValues,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<UsageMetadata>,
-}
-
-#[derive(Deserialize)]
-struct GeminiEmbeddingValues {
-    values: Vec<f32>,
-}
-
-// Gemini Chat Structs
-#[derive(Serialize)]
-struct GeminiChatRequest {
-    contents: Vec<GeminiChatContent>,
-    #[serde(rename = "generationConfig")]
-    generation_config: GeminiGenerationConfig,
-}
-
-#[derive(Serialize)]
-struct GeminiChatContent {
-    parts: Vec<GeminiChatPart>,
-}
-
-#[derive(Serialize)]
-struct GeminiChatPart {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct GeminiGenerationConfig {
-    #[serde(rename = "responseMimeType")]
-    response_mime_type: String,
-}
-
-#[derive(Deserialize)]
-struct GeminiChatResponse {
-    candidates: Vec<GeminiCandidate>,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<UsageMetadata>,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidate {
-    content: GeminiCandidateContent,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidateContent {
-    parts: Vec<GeminiCandidatePart>,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidatePart {
-    text: String,
-}
-
 // AI parsed response structure
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct AiStructuredResponse {
@@ -525,116 +434,17 @@ fn budget_maturity_summary(category_count: i64, budget_limit: f64, transaction_c
     )
 }
 
-// Helper: persist one LLM call's token usage to the llm_usage table.
-//
-// AC #6 fail-safe: a usage-write failure MUST NOT propagate or panic — it is
-// logged at warn and swallowed so the chat path is never broken or meaningfully
-// slowed by accounting failures (e.g. a transient DB error or FK violation).
-async fn record_llm_usage(
-    pool: &sqlx::PgPool,
-    user_id: uuid::Uuid,
-    model: &str,
-    call_type: &str,
-    input_tokens: i32,
-    output_tokens: i32,
-    thinking_tokens: i32,
-    total_tokens: i32,
-) {
-    let res = sqlx::query(
-        "INSERT INTO llm_usage (id, user_id, model, call_type, input_tokens, output_tokens, thinking_tokens, total_tokens) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-    )
-    .bind(uuid::Uuid::new_v4())
-    .bind(user_id)
-    .bind(model)
-    .bind(call_type)
-    .bind(input_tokens)
-    .bind(output_tokens)
-    .bind(thinking_tokens)
-    .bind(total_tokens)
-    .execute(pool)
-    .await;
-    if let Err(e) = res {
-        tracing::warn!("failed to record llm_usage (user={user_id}, call_type={call_type}): {e}");
-    }
-}
-
 /// Base URL for the Gemini API. Overridable via `GEMINI_API_BASE` so tests can point at a
 /// local mock server; unset in production, where it defaults to the real API.
 /// Whitespace- and trailing-slash-trimmed (mirrors `github.rs`'s `api_base()`); a blank
 /// value falls back to the default.
 ///
-/// `pub(crate)` (widened by #283) so `reports.rs`'s `gemini_narrative` can thread its URL
-/// construction through the same seam — see AGENTS.md §2.
-///
 /// nels-oss#3: now a thin delegate to `llm::Provider::Gemini.api_base()`, the single
-/// owner of the base-URL rule, kept so existing call sites and tests compile.
+/// owner of the base-URL rule. Test-only since nels-oss#3 Task 6: every production
+/// call site now goes through `llm.rs`; kept for the existing base-URL tests.
+#[cfg(test)]
 pub(crate) fn gemini_api_base() -> String {
     crate::llm::Provider::Gemini.api_base()
-}
-
-// Helper: Call Gemini gemini-embedding-001 (768-dim to match the chat_messages.embedding column)
-pub(crate) async fn get_gemini_embedding(
-    text: &str,
-    api_key: &str,
-    pool: &sqlx::PgPool,
-    user_id: uuid::Uuid,
-) -> Option<Vec<f32>> {
-    // Bound the embedding call: this runs on the synchronous REST
-    // create_transaction write path, so a stalled Gemini connection must not
-    // hang the request indefinitely. A timeout yields an Err -> None below,
-    // preserving the tolerant NULL-embedding behavior.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-embedding-001:embedContent?key={}",
-        gemini_api_base(), api_key
-    );
-
-    let req_payload = GeminiEmbedRequest {
-        model: "models/gemini-embedding-001".to_string(),
-        content: GeminiEmbedRequestContent {
-            parts: vec![GeminiEmbedPart { text: text.to_string() }],
-        },
-        output_dimensionality: Some(768),
-    };
-
-    let res = client.post(&url)
-        .json(&req_payload)
-        .send()
-        .await;
-
-    match res {
-        Ok(response) => {
-            if response.status().is_success() {
-                if let Ok(embed_res) = response.json::<GeminiEmbedResponse>().await {
-                    let usage = embed_res.usage_metadata.unwrap_or_default();
-                    record_llm_usage(
-                        pool,
-                        user_id,
-                        "models/gemini-embedding-001",
-                        "embedding",
-                        usage.prompt_token_count.unwrap_or(0),
-                        usage.candidates_token_count.unwrap_or(0),
-                        usage.thoughts_token_count.unwrap_or(0),
-                        usage.total_token_count.unwrap_or(0),
-                    )
-                    .await;
-                    return Some(embed_res.embedding.values);
-                }
-            } else {
-                tracing::error!("Gemini embedding failed with status: {:?}", response.status());
-                if let Ok(err_text) = response.text().await {
-                    tracing::error!("Embedding error text: {}", err_text);
-                }
-            }
-        }
-        Err(e) => tracing::error!("Error calling Gemini embedding: {}", e),
-    }
-
-    None
 }
 
 // Helper: Format a f32 vector to PostgreSQL array string compatible with pgvector: "[x,y,z...]"
@@ -2214,7 +2024,8 @@ pub async fn chat_endpoint(
             && (msg_lower.contains("edit") || msg_lower.contains("change")
                 || msg_lower.contains("correct") || msg_lower.contains("update")) {
             // Offline EDIT routing (#199). The actual edit resolves the target by
-            // semantic embedding search, which requires GEMINI_API_KEY; in offline
+            // semantic embedding search, which needs an embedding-capable resolved
+            // provider (llm::embed_for); in offline
             // mode there are no embeddings, so this dispatches and then degrades
             // gracefully ("couldn't look up that transaction"). Routing here keeps
             // the action reachable and unit-testable.
@@ -3433,7 +3244,7 @@ pub async fn chat_endpoint(
                                 // embedding, #195). Tolerant: no key / failure -> NULL
                                 // embedding, transaction still created.
                                 let tx_row = crate::budget::insert_transaction_with_embedding(
-                                    &state.db, bid, category_id, amt, &desc, user_id,
+                                    &state.db, bid, category_id, amt, &desc, user_id, &ai,
                                 )
                                 .await;
 
@@ -4438,9 +4249,10 @@ pub async fn chat_endpoint(
                     );
                 }
                 (Some(_), None) => {
-                    // No query embedding (e.g. no GEMINI_API_KEY, or the embed
-                    // call failed). Stay quiet: a missing key is intentional and
-                    // an embed failure is already logged in get_gemini_embedding.
+                    // No query embedding (the resolved provider cannot embed, or
+                    // the embed call failed). Stay quiet: a non-embedding provider
+                    // is intentional and an embed failure is already logged by
+                    // the llm.rs adapter.
                     search_results_md = Some(
                         "I couldn't search your transactions right now.".to_string(),
                     );
@@ -7586,7 +7398,7 @@ pub(crate) fn offline_budgets_list_action(msg_lower: &str) -> Option<&'static st
 
 /// Offline (no-LLM) router for the bank-linking chat actions (#303): LINK_BANK_ACCOUNT,
 /// LIST_LINKED_ACCOUNTS, UNLINK_BANK_ACCOUNT, REFRESH_BANK_ACCOUNT. Pure keyword matching so
-/// it can run without GEMINI_API_KEY, mirroring the other `offline_*_action` helpers.
+/// it can run without a resolved LLM provider, mirroring the other `offline_*_action` helpers.
 pub(crate) fn offline_linked_accounts_action(msg_lower: &str) -> Option<&'static str> {
     // Order matters: "disconnect"/"unlink" checked before the generic "link"
     // phrase so "unlink my bank account" doesn't match LINK_BANK_ACCOUNT first.
@@ -7613,7 +7425,7 @@ pub(crate) fn offline_linked_accounts_action(msg_lower: &str) -> Option<&'static
 /// SAME message. No conversational memory (mirrors offline_budget_strategy's
 /// same-message-only convention), so "link my UK bank account" works but a
 /// bare follow-up "it's in the UK" after a prior clarifying question does not
-/// — that gap only affects the offline (no GEMINI_API_KEY) path.
+/// — that gap only affects the offline (no resolved provider) path.
 pub(crate) fn offline_country_hint(msg_lower: &str) -> Option<&'static str> {
     // "uk"/"us" are checked as EXACT whole-word tokens (not `.contains(" uk")`/
     // `.contains("us bank")`), which previously false-positived on any longer
@@ -8086,7 +7898,7 @@ async fn generate_suggested_question(
 //
 // #283 widened this to `pub(crate)` and moved it to module scope (from inside `mod tests`
 // below) so `reports.rs`'s own test module can reuse the exact same lock for its
-// `gemini_narrative` timeout test — a second, parallel lock would silently reintroduce the
+// narrative timeout test — a second, parallel lock would silently reintroduce the
 // cross-test env-var race this lock exists to prevent.
 #[cfg(test)]
 pub(crate) static GEMINI_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -8385,7 +8197,7 @@ mod tests {
     // LOGGED via tracing::error! before generate_conversation_title returns None, not
     // silently swallowed via `.ok()?`. The `None` return alone can't distinguish the old
     // (silent) code from the fixed code since both return None on a parse failure — only
-    // the captured error log proves the fix, mirroring reports.rs::gemini_narrative's own
+    // the captured error log proves the fix, mirroring reports.rs's former narrative
     // #294 fix and notifications.rs's #201 log-capture pattern.
     #[tokio::test(flavor = "current_thread")]
     async fn generate_conversation_title_logs_malformed_2xx_body() {
@@ -8657,44 +8469,6 @@ mod tests {
                 "imported_source_suffix must still emit the 'imported from' token rule 20e keys off (renderer/rule drift guard)"
             );
         }
-    }
-
-    // UsageMetadata deserialization + the None->0 coercion used when recording
-    // token usage. Pure unit test: no DB, no network.
-    #[test]
-    fn usage_metadata_deserializes_and_coerces_missing_to_zero() {
-        // A response with NO usageMetadata field -> usage_metadata is None, and
-        // the recorded token values coerce to 0.
-        let json = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}"#;
-        let resp: GeminiChatResponse = serde_json::from_str(json).expect("must parse");
-        assert!(resp.usage_metadata.is_none(), "absent usageMetadata -> None");
-        let usage = resp.usage_metadata.as_ref();
-        assert_eq!(usage.and_then(|u| u.prompt_token_count).unwrap_or(0), 0);
-        assert_eq!(usage.and_then(|u| u.candidates_token_count).unwrap_or(0), 0);
-        assert_eq!(usage.and_then(|u| u.total_token_count).unwrap_or(0), 0);
-
-        // Partial UsageMetadata: only totalTokenCount present. Missing fields
-        // deserialize to None and coerce to 0; total parses to Some(42).
-        let partial: UsageMetadata =
-            serde_json::from_str(r#"{"totalTokenCount": 42}"#).expect("must parse");
-        assert_eq!(partial.prompt_token_count, None);
-        assert_eq!(partial.candidates_token_count, None);
-        assert_eq!(partial.thoughts_token_count, None);
-        assert_eq!(partial.total_token_count, Some(42));
-        assert_eq!(partial.prompt_token_count.unwrap_or(0), 0);
-        assert_eq!(partial.candidates_token_count.unwrap_or(0), 0);
-        assert_eq!(partial.thoughts_token_count.unwrap_or(0), 0);
-
-        // Full UsageMetadata: all camelCase fields parse via the rename,
-        // including thoughtsTokenCount from Gemini 2.5 thinking models.
-        let full: UsageMetadata = serde_json::from_str(
-            r#"{"promptTokenCount":10,"candidatesTokenCount":20,"thoughtsTokenCount":5,"totalTokenCount":35}"#,
-        )
-        .expect("must parse");
-        assert_eq!(full.prompt_token_count, Some(10));
-        assert_eq!(full.candidates_token_count, Some(20));
-        assert_eq!(full.thoughts_token_count, Some(5));
-        assert_eq!(full.total_token_count, Some(35));
     }
 
     // vector_to_string formats a f32 slice as pgvector's bracketed, comma-
@@ -10736,9 +10510,9 @@ mod tests {
     // hanging endpoint, rather than the request hanging forever. This is a first exchange (no
     // conversation_id) with a non-empty GEMINI_API_KEY, so chat_endpoint takes the live-call
     // branch through FOUR sequential Gemini calls against the same mock, each bounded by its own
-    // #249 timeout: get_gemini_embedding for the user's message (20s, semantic-search context,
+    // #249 timeout: llm::embed_for for the user's message (20s, semantic-search context,
     // ~line 1317), the main chat generateContent call (30s, ~line 1508), a second
-    // get_gemini_embedding for the AI's own reply text (20s, ~line 3576), and — since this is a
+    // llm::embed_for for the AI's own reply text (20s, ~line 3576), and — since this is a
     // first exchange with no existing title — generate_conversation_title (20s, ~line 3618),
     // fired inline before the HTTP response returns. All four are exercised and all four must
     // individually time out rather than hang: total wall-clock is ~90s (20+30+20+20), empirically
@@ -12172,6 +11946,132 @@ mod tests {
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(user_id)
             .execute(&pool).await.expect("cleanup");
+    }
+
+    // nels-oss#3 (spec A8): with a BYO OpenAI key saved AND a Nels GEMINI_API_KEY
+    // set, a chat turn must go to OpenAI only, execute the action, tag usage
+    // 'byo', and send zero requests carrying the Nels key.
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn chat_byo_never_calls_nels_gemini() {
+        let _env = GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct Restore(Vec<(&'static str, Option<String>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+        let _r = Restore(
+            ["GEMINI_API_KEY", "GEMINI_API_BASE", "OPENAI_API_BASE"]
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect(),
+        );
+
+        let gemini = wiremock::MockServer::start().await;
+        let openai = wiremock::MockServer::start().await;
+        std::env::set_var("GEMINI_API_KEY", "NELS-KEY");
+        std::env::set_var("GEMINI_API_BASE", gemini.uri());
+        std::env::set_var("OPENAI_API_BASE", openai.uri());
+        wiremock::Mock::given(wiremock::matchers::header("x-goog-api-key", "NELS-KEY"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&gemini)
+            .await;
+        let reply = serde_json::json!({
+            "thought": "", "action": "ADD_TRANSACTION",
+            "action_params": {"amount": 12.5, "description": "coffee", "category_name": "Dining"},
+            "response_text": "Logged $12.50 for coffee."
+        });
+        wiremock::Mock::given(wiremock::matchers::path("/v1/chat/completions"))
+            .and(wiremock::matchers::header("authorization", "Bearer sk-user"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": reply.to_string()}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+            })))
+            .mount(&openai)
+            .await;
+        // The title call also goes to OpenAI (text mode); it matches the same mock and is harmless.
+
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
+        });
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let cipher = std::sync::Arc::new(crate::auth::test_cipher());
+        let state = AppState {
+            db: pool.clone(),
+            cipher: cipher.clone(),
+            webauthn: std::sync::Arc::new(crate::passkeys::WebauthnRegistry::for_test()),
+        };
+        let user_id = uuid::Uuid::new_v4();
+        let budget_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+            .bind(user_id)
+            .bind(format!("byo-{user_id}@example.test"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO budgets (id, owner_id, name, time_frame, budget_limit, is_default) \
+             VALUES ($1,$2,'Home','monthly',500.0,TRUE)",
+        )
+        .bind(budget_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO user_ai_providers (user_id, provider, encrypted_key, key_last4, last_verified_at) \
+             VALUES ($1,'openai',$2,'user',NOW())",
+        )
+        .bind(user_id)
+        .bind(cipher.encrypt("sk-user").unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let res = chat_endpoint(
+            axum::extract::State(state),
+            axum::Extension(user_id),
+            axum::Json(ChatRequest {
+                message: "I spent 12.50 on coffee".into(),
+                budget_id: None,
+                conversation_id: None,
+                locale: None,
+            }),
+        )
+        .await
+        .expect("chat ok");
+        assert!(res.0.action_taken.is_some(), "action executed: {:?}", res.0.response);
+        assert!(res.0.ai_provider_error.is_none());
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE budget_id=$1")
+            .bind(budget_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let src: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT key_source FROM llm_usage WHERE user_id=$1")
+                .bind(user_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(src, vec!["byo".to_string()]);
+        let emb: Option<bool> =
+            sqlx::query_scalar("SELECT embedding IS NULL FROM transactions WHERE budget_id=$1")
+                .bind(budget_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(emb, Some(true), "OpenAI users get NULL embeddings (spec A6)");
+        // wiremock verifies .expect(0) on drop of `gemini`
+
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&pool).await;
     }
 
     #[tokio::test]
@@ -15104,82 +15004,6 @@ mod tests {
                 .await
                 .expect("cleanup user");
         }
-    }
-
-    // record_llm_usage persists exactly one row carrying the supplied token
-    // counts for a real user (issue #140, AC #2).
-    #[tokio::test]
-    #[ignore = "requires Postgres + pgvector; run via: cargo test -- --ignored"]
-    async fn record_llm_usage_persists_one_row() {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
-        });
-        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
-
-        let user_id = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
-            .bind(user_id)
-            .bind(format!("llm-usage-{user_id}@example.test"))
-            .execute(&pool)
-            .await
-            .expect("seed user");
-
-        record_llm_usage(&pool, user_id, "gemini-2.5-flash", "chat", 10, 20, 5, 35).await;
-
-        let (count, model, call_type, input_t, output_t, thinking_t, total_t): (i64, String, String, i32, i32, i32, i32) =
-            sqlx::query_as(
-                "SELECT COUNT(*), MAX(model), MAX(call_type), MAX(input_tokens), MAX(output_tokens), MAX(thinking_tokens), MAX(total_tokens) \
-                 FROM llm_usage WHERE user_id = $1",
-            )
-            .bind(user_id)
-            .fetch_one(&pool)
-            .await
-            .expect("query llm_usage");
-
-        assert_eq!(count, 1, "exactly one llm_usage row recorded");
-        assert_eq!(model, "gemini-2.5-flash");
-        assert_eq!(call_type, "chat");
-        assert_eq!(input_t, 10);
-        assert_eq!(output_t, 20);
-        assert_eq!(thinking_t, 5);
-        assert_eq!(total_t, 35);
-
-        // Cleanup (FK ON DELETE CASCADE would also clear llm_usage, but be explicit).
-        sqlx::query("DELETE FROM llm_usage WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("cleanup llm_usage");
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("cleanup user");
-    }
-
-    // AC #6 fail-safe: a usage-write failure (here an FK violation from a
-    // non-existent user_id) must be swallowed — record_llm_usage returns ()
-    // without panicking and inserts no row.
-    #[tokio::test]
-    #[ignore = "requires Postgres + pgvector; run via: cargo test -- --ignored"]
-    async fn record_llm_usage_swallows_write_failure() {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
-        });
-        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
-
-        // No such user — the FK to users(id) must fail, and the helper must
-        // swallow that error rather than panic or propagate.
-        let bogus_user_id = uuid::Uuid::new_v4();
-        record_llm_usage(&pool, bogus_user_id, "m", "chat", 1, 1, 1, 1).await;
-
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage WHERE user_id = $1")
-                .bind(bogus_user_id)
-                .fetch_one(&pool)
-                .await
-                .expect("query llm_usage");
-        assert_eq!(count, 0, "FK violation must leave no llm_usage row");
     }
 
     // ===== Multi-category chat creation (#166) =====
@@ -19329,7 +19153,7 @@ mod tests {
     // behavior that are actually NEW here: TRANSACTION_LOOKUP_BY_EMBEDDING now
     // selects transaction_date, and PendingDeletion.name is built from it. A
     // full end-to-end run through chat_delete_transaction (which embeds the
-    // locator via get_gemini_embedding) needs a real GEMINI_API_KEY and is not
+    // locator via llm::embed_for) needs a real Gemini key and is not
     // driveable locally — the same pre-existing limitation
     // transaction_lookup_and_update_sql_round_trip works around for
     // EDIT_TRANSACTION by seeding embeddings directly and querying
@@ -19608,7 +19432,8 @@ mod tests {
     }
 
     // Backfill mechanics + idempotency (#195) without a live Gemini API:
-    //  - the empty-key short-circuit returns Ok(0) (the function runs, no network);
+    //  - with no Nels GEMINI_API_KEY, a run leaves this Nels-hosted owner's rows
+    //    untouched (nels-oss#3: the owner has no embedder, so nothing is selected);
     //  - the "only NULLs" predicate the backfill SELECT uses leaves zero rows for a
     //    budget whose transactions already have embeddings, so a real re-run would
     //    update none of them.
@@ -19669,11 +19494,52 @@ mod tests {
         .expect("count null embeddings");
         assert_eq!(null_count, 0, "already-embedded rows are not candidates for backfill");
 
-        // Empty key short-circuits with no network call and reports zero updates.
-        let updated = crate::backfill::backfill_transaction_embeddings(&pool, "")
+        // nels-oss#3: with no Nels GEMINI_API_KEY this Nels-hosted owner is not
+        // eligible, so its rows are untouched. GEMINI_API_BASE points at an empty
+        // mock so a stray BYO-gemini row elsewhere in the shared DB can never reach
+        // the real Google API. A global updated-count is not asserted: the backfill
+        // scans the whole shared DB.
+        {
+            struct Restore(Vec<(&'static str, Option<String>)>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    for (k, v) in &self.0 {
+                        match v {
+                            Some(v) => std::env::set_var(k, v),
+                            None => std::env::remove_var(k),
+                        }
+                    }
+                }
+            }
+            let _restore = Restore(
+                ["GEMINI_API_KEY", "GEMINI_API_BASE"]
+                    .iter()
+                    .map(|k| (*k, std::env::var(k).ok()))
+                    .collect(),
+            );
+            let empty_gemini = wiremock::MockServer::start().await;
+            std::env::remove_var("GEMINI_API_KEY");
+            std::env::set_var("GEMINI_API_BASE", empty_gemini.uri());
+
+            let null_before: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE budget_id = $1 AND embedding IS NULL",
+            )
+            .bind(budget_id)
+            .fetch_one(&pool)
             .await
-            .expect("backfill runs");
-        assert_eq!(updated, 0, "empty GEMINI_API_KEY backfills nothing");
+            .expect("count null embeddings before backfill");
+            crate::backfill::backfill_transaction_embeddings(&pool, &crate::auth::test_cipher())
+                .await
+                .expect("backfill runs");
+            let null_after: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE budget_id = $1 AND embedding IS NULL",
+            )
+            .bind(budget_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count null embeddings after backfill");
+            assert_eq!(null_before, null_after, "a keyless backfill leaves this budget's rows unchanged");
+        }
 
         // Simulate one backfill step on a fresh NULL row, then confirm the budget
         // has no remaining NULLs — a re-run would update zero of these rows.

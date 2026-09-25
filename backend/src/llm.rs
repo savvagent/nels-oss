@@ -1250,4 +1250,98 @@ mod tests {
             .bind(uid).fetch_one(&db).await.unwrap();
         assert_eq!(n, 1);
     }
+
+    // Ported from rag::record_llm_usage_persists_one_row (issue #140, AC #2):
+    // record_usage persists exactly one row carrying the supplied token counts,
+    // now tagged with provider and key_source (nels-oss#3).
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn record_usage_persists_one_row() {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
+        });
+        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
+
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+            .bind(user_id)
+            .bind(format!("llm-usage-{user_id}@example.test"))
+            .execute(&pool)
+            .await
+            .expect("seed user");
+
+        record_usage(
+            &pool,
+            user_id,
+            &LlmCredentials::new(Provider::Gemini, "k".into(), KeySource::Nels),
+            "models/gemini-2.5-flash",
+            "chat",
+            TokenUsage { input: 10, output: 20, thinking: 5, total: 35 },
+        )
+        .await;
+
+        #[allow(clippy::type_complexity)]
+        let (count, model, call_type, input_t, output_t, thinking_t, total_t, provider, key_source): (
+            i64, String, String, i32, i32, i32, i32, String, String,
+        ) = sqlx::query_as(
+            "SELECT COUNT(*), MAX(model), MAX(call_type), MAX(input_tokens), MAX(output_tokens), \
+             MAX(thinking_tokens), MAX(total_tokens), MAX(provider), MAX(key_source) \
+             FROM llm_usage WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("query llm_usage");
+
+        assert_eq!(count, 1, "exactly one llm_usage row recorded");
+        assert_eq!(model, "models/gemini-2.5-flash");
+        assert_eq!(call_type, "chat");
+        assert_eq!(input_t, 10);
+        assert_eq!(output_t, 20);
+        assert_eq!(thinking_t, 5);
+        assert_eq!(total_t, 35);
+        assert_eq!(provider, "gemini");
+        assert_eq!(key_source, "nels");
+
+        sqlx::query("DELETE FROM llm_usage WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup llm_usage");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup user");
+    }
+
+    // Ported from rag::record_llm_usage_swallows_write_failure (AC #6 fail-safe):
+    // a usage-write failure (an FK violation from a non-existent user_id) must be
+    // swallowed — record_usage returns () without panicking and inserts no row.
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn record_usage_swallows_write_failure() {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
+        });
+        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
+
+        let bogus_user_id = Uuid::new_v4();
+        record_usage(
+            &pool,
+            bogus_user_id,
+            &LlmCredentials::new(Provider::Gemini, "k".into(), KeySource::Nels),
+            "m",
+            "chat",
+            TokenUsage { input: 1, output: 1, thinking: 1, total: 1 },
+        )
+        .await;
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage WHERE user_id = $1")
+            .bind(bogus_user_id)
+            .fetch_one(&pool)
+            .await
+            .expect("query llm_usage");
+        assert_eq!(count, 0, "FK violation must leave no llm_usage row");
+    }
 }

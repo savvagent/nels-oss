@@ -206,13 +206,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One-shot backfill of transaction embeddings (#195), opt-in via
     // BACKFILL_TRANSACTION_EMBEDDINGS=1. Spawned non-blocking so a normal boot is
     // unaffected; it walks rows with a NULL embedding and fills them. Idempotent —
-    // a re-run after a full pass updates nothing. Needs GEMINI_API_KEY to embed.
+    // a re-run after a full pass updates nothing. Each row is embedded with its
+    // budget owner's resolved provider (nels-oss#3): Nels-hosted owners need Nels's
+    // Gemini key, while BYO Gemini owners are embedded with their own key even when
+    // Nels has none. BYO OpenAI/Anthropic owners are skipped (they cannot embed).
     if std::env::var("BACKFILL_TRANSACTION_EMBEDDINGS").as_deref() == Ok("1") {
         let backfill_pool = state.db.clone();
-        let backfill_api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+        let backfill_cipher = state.cipher.clone();
         tokio::spawn(async move {
             tracing::info!("Starting one-shot transaction embedding backfill...");
-            match backfill::backfill_transaction_embeddings(&backfill_pool, &backfill_api_key).await {
+            match backfill::backfill_transaction_embeddings(&backfill_pool, &backfill_cipher).await {
                 Ok(n) => tracing::info!(updated = n, "Transaction embedding backfill complete"),
                 Err(e) => tracing::warn!(error = %e, "Transaction embedding backfill failed"),
             }
