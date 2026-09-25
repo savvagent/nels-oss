@@ -51,6 +51,10 @@ pub struct AccountExport {
     pub assets: Vec<crate::assets::Asset>,
     pub asset_holdings: Vec<crate::assets::AssetHolding>,
     pub asset_balance_history: Vec<crate::assets::AssetBalanceHistory>,
+    /// The user's model-provider choice (nels-oss#3): provider, model, key
+    /// last4 and timestamps. Never the key or its ciphertext. `null` when the
+    /// user has not saved their own key.
+    pub ai_provider: Option<crate::ai_provider::AiProviderExport>,
 }
 
 /// The exported account profile.
@@ -114,6 +118,7 @@ pub fn build_account_export(
     assets: Vec<crate::assets::Asset>,
     asset_holdings: Vec<crate::assets::AssetHolding>,
     asset_balance_history: Vec<crate::assets::AssetBalanceHistory>,
+    ai_provider: Option<crate::ai_provider::AiProviderExport>,
 ) -> AccountExport {
     AccountExport {
         account,
@@ -127,6 +132,7 @@ pub fn build_account_export(
         assets,
         asset_holdings,
         asset_balance_history,
+        ai_provider,
     }
 }
 
@@ -317,6 +323,10 @@ pub async fn fetch_account_export(
     .await
     .map_err(internal_error)?;
 
+    let ai_provider = crate::ai_provider::export_for(pool, user_id)
+        .await
+        .map_err(internal_error)?;
+
     Ok(build_account_export(
         account,
         owned_budgets,
@@ -329,6 +339,7 @@ pub async fn fetch_account_export(
         assets,
         asset_holdings,
         asset_balance_history,
+        ai_provider,
     ))
 }
 
@@ -465,6 +476,10 @@ pub(crate) async fn delete_user_data(
         .execute(&mut *tx)
         .await
         .map_err(internal_error)?;
+
+    // `user_ai_providers` (the BYO key, nels-oss#3) and
+    // `ai_key_validation_attempts` are both `user_id ... ON DELETE CASCADE`, so
+    // the `DELETE FROM users` below removes them; no explicit delete is needed.
 
     // `retirement_profiles.user_id` is ON DELETE CASCADE, so this is
     // belt-and-braces rather than strictly required — the same symmetry the
@@ -752,6 +767,7 @@ mod tests {
             vec![asset],
             vec![holding],
             vec![history],
+            None,
         );
 
         let json = serde_json::to_string(&export).expect("serializes");

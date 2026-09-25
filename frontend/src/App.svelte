@@ -84,6 +84,7 @@
     TIMEOUT_MESSAGE,
   } from "./lib/fetchTimeout.js";
   import { parseApiResponse } from "./lib/parseApiResponse.js";
+  import { providerErrorKey } from "./lib/aiProviderView.js";
 
   const t = (key, opts) => get(_)(key, opts);
 
@@ -1477,6 +1478,10 @@
           // (which navigates away instead — its table stays discarded, unchanged
           // from #233's existing convention).
           categories_table_html: inlineCategoriesTableHtml(chatRes),
+          // nels-oss#3: the user's own AI key failed this turn (auth_rejected |
+          // rate_limited | unavailable | key_unavailable). The backend's
+          // response text stays as sent; the bubble adds a link to Settings.
+          aiProviderError: chatRes.ai_provider_error ?? null,
         },
       ];
 
@@ -2812,6 +2817,19 @@
                          reason CategoriesView.svelte's identical comment gives. -->
                     <div class="mt-2 rounded-lg bg-base-100 border border-base-300 p-2">
                       {@html msg.categories_table_html}
+                    </div>
+                  {/if}
+                  {#if msg.aiProviderError}
+                    <!-- nels-oss#3: a failing BYO key is fixed in Settings. -->
+                    <div class="mt-2 whitespace-normal">
+                      <button
+                        type="button"
+                        class="btn btn-xs btn-outline"
+                        title={$_(providerErrorKey(msg.aiProviderError))}
+                        onclick={() => navigate("settings")}
+                      >
+                        {$_("aiProvider.openSettings")}
+                      </button>
                     </div>
                   {/if}
                 </div>

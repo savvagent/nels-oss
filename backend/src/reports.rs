@@ -429,7 +429,7 @@ pub async fn top_transactions(
 }
 
 // ---------------------------------------------------------------------------
-// Narrative: deterministic template + Gemini call
+// Narrative: deterministic template + optional LLM call (resolved provider)
 // ---------------------------------------------------------------------------
 
 pub fn template_narrative(s: &Summary, by_category: &[CategoryRow], label: &str) -> String {
@@ -453,124 +453,41 @@ pub fn template_narrative(s: &Summary, by_category: &[CategoryRow], label: &str)
     msg
 }
 
-/// Returns an AI narrative when `use_ai` and a key are present; otherwise the
-/// deterministic template. Never hard-fails on the key being absent.
+/// Returns an AI narrative when `use_ai` and the caller's resolved provider allow
+/// it; otherwise (or on any failure) the deterministic template. Recorded in
+/// llm_usage as call_type 'narrative' (nels-oss#3; previously unrecorded).
 pub async fn generate_narrative(
+    db: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+    ai: &crate::llm::Resolved,
     s: &Summary,
     by_category: &[CategoryRow],
     label: &str,
     use_ai: bool,
 ) -> String {
     let template = template_narrative(s, by_category, label);
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    if !use_ai || api_key.is_empty() {
-        return template;
-    }
-    gemini_narrative(&template, &api_key)
+    let creds = match (use_ai, ai.creds()) {
+        (true, Some(c)) => c,
+        _ => return template,
+    };
+    let prompt = narrative_prompt(&template);
+    // #283: bounded by a 20s timeout so a stalled provider connection cannot hang
+    // the report handler; any failure falls back to the template.
+    crate::llm::generate_text_for(db, user_id, creds, "narrative", &prompt, std::time::Duration::from_secs(20))
         .await
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
         .unwrap_or(template)
 }
 
-// --- Self-contained Gemini text call (plain text, no JSON mime). ---
-// NOTE: duplicates the inline generateContent call in rag.rs::chat_endpoint.
-// Deliberate to avoid editing rag.rs; a later cleanup can extract a shared helper.
-#[derive(Serialize)]
-struct GenPart {
-    text: String,
-}
-#[derive(Serialize)]
-struct GenContent {
-    parts: Vec<GenPart>,
-}
-#[derive(Serialize)]
-struct GenRequest {
-    contents: Vec<GenContent>,
-}
-
-#[derive(Deserialize)]
-struct GenRespPart {
-    text: String,
-}
-#[derive(Deserialize)]
-struct GenRespContent {
-    parts: Vec<GenRespPart>,
-}
-#[derive(Deserialize)]
-struct GenCandidate {
-    content: GenRespContent,
-}
-#[derive(Deserialize)]
-struct GenResponse {
-    candidates: Vec<GenCandidate>,
-}
-
-async fn gemini_narrative(facts: &str, api_key: &str) -> Option<String> {
-    // #283: bound the call — a stalled Gemini connection must not hang generate_narrative
-    // indefinitely, mirroring get_gemini_embedding's #249 precedent in rag.rs. A build()
-    // failure (near-impossible here) falls back to an unbounded client, same tradeoff as
-    // that precedent — logged (unlike the rag.rs precedents) since this fallback silently
-    // reintroduces the exact unbounded-hang bug this fix exists to close.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|e| {
-            tracing::error!(
-                "Gemini narrative client build failed, falling back to an unbounded client: {}",
-                e
-            );
-            reqwest::Client::new()
-        });
-    let url = format!(
-        "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        crate::rag::gemini_api_base(),
-        api_key
-    );
-    let prompt = format!(
+fn narrative_prompt(facts: &str) -> String {
+    format!(
         "You are a friendly budgeting assistant. In 2-3 short sentences, give an \
          encouraging, concrete insight or recommendation based ONLY on these figures. \
          Do not invent numbers.\n\nFIGURES: {}",
         facts
-    );
-    let body = GenRequest {
-        contents: vec![GenContent {
-            parts: vec![GenPart { text: prompt }],
-        }],
-    };
-    match client.post(&url).json(&body).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let parsed = match resp.json::<GenResponse>().await {
-                Ok(p) => p,
-                Err(e) => {
-                    // #294: log rather than silently discard a malformed/unexpected 2xx body,
-                    // mirroring the non-2xx and Err arms below (both already log).
-                    tracing::error!("Gemini narrative response parse failed: {}", e);
-                    return None;
-                }
-            };
-            let text = parsed
-                .candidates
-                .first()?
-                .content
-                .parts
-                .first()?
-                .text
-                .trim()
-                .to_string();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
-        }
-        Ok(resp) => {
-            tracing::error!("Gemini narrative failed: {:?}", resp.status());
-            None
-        }
-        Err(e) => {
-            tracing::error!("Gemini narrative error: {}", e);
-            None
-        }
-    }
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -618,11 +535,24 @@ pub async fn get_report_handler(
         .await
         .map_err(internal_error)?;
 
+    let use_ai = q.narrative.unwrap_or(true);
+    // Resolve the caller's provider only when an AI narrative was requested.
+    // Named `ai` — `resolved` above is the report period.
+    let ai = if use_ai {
+        crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+            .await
+            .unwrap_or(crate::llm::Resolved::Offline)
+    } else {
+        crate::llm::Resolved::Offline
+    };
     let narrative = generate_narrative(
+        &state.db,
+        user_id,
+        &ai,
         &summary,
         &by_category,
         &resolved.label,
-        q.narrative.unwrap_or(true),
+        use_ai,
     )
     .await;
 
@@ -815,27 +745,20 @@ mod tests {
         assert!(msg.contains("Food is at 84% of its limit"));
     }
 
-    // #283: proves gemini_narrative's #249-class hang is now bounded by a real 20s timeout —
+    // #283: proves the narrative call's #249-class hang is bounded by a real 20s timeout —
     // not just that a Duration was passed to Client::builder(). A local mock Gemini endpoint
     // (via GEMINI_API_BASE) sleeps past the configured timeout before responding; the call
     // must fall back to the exact template_narrative output well before the mock ever answers.
-    // generate_narrative/gemini_narrative are entirely pool/DB-free, so no lazy pool or
-    // Postgres is needed — this test runs in the default `cargo test`.
-    // GEMINI_API_BASE is test-only (never legitimately set outside a test run), so unconditional
-    // removal on drop matches rag.rs's own GeminiApiBaseGuard precedent. GEMINI_API_KEY, though,
-    // is a var a developer may have genuinely exported in their shell for live Gemini testing —
-    // blindly clearing it would silently and permanently lose that value for the rest of the
-    // test-binary process. Capture-and-restore instead, mirroring rag.rs's own EnvGuard(Option<String>)
-    // pattern used for this exact "set a dummy key" scenario (e.g.
-    // chat_endpoint_falls_back_to_communications_link_down_on_gemini_timeout).
-    struct GeminiEnvGuard(Option<String>);
+    // nels-oss#3: generate_narrative now takes a resolved provider and a pool; the failure
+    // path for a Nels-sourced credential touches no DB (usage is recorded only on success,
+    // and `observe` is a no-op for Nels keys), so a lazy, never-connected pool suffices and
+    // this test still runs in the default `cargo test`. GEMINI_API_BASE is test-only (never
+    // legitimately set outside a test run), so unconditional removal on drop matches rag.rs's
+    // own GeminiApiBaseGuard precedent.
+    struct GeminiEnvGuard;
     impl Drop for GeminiEnvGuard {
         fn drop(&mut self) {
             std::env::remove_var("GEMINI_API_BASE");
-            match &self.0 {
-                Some(v) => std::env::set_var("GEMINI_API_KEY", v),
-                None => std::env::remove_var("GEMINI_API_KEY"),
-            }
         }
     }
 
@@ -851,7 +774,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gemini_narrative_falls_back_to_template_on_timeout() {
+    async fn narrative_falls_back_to_template_on_timeout() {
         let _env = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -865,9 +788,16 @@ mod tests {
                 eprintln!("mock Gemini server error: {e}");
             }
         }));
-        let _guard = GeminiEnvGuard(std::env::var("GEMINI_API_KEY").ok());
+        let _guard = GeminiEnvGuard;
         std::env::set_var("GEMINI_API_BASE", format!("http://{addr}"));
-        std::env::set_var("GEMINI_API_KEY", "dummy-test-key");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let ai = crate::llm::Resolved::Llm(crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        ));
 
         let s = Summary {
             income: 1000.0,
@@ -879,7 +809,7 @@ mod tests {
         let expected_template = template_narrative(&s, &cats, "this_month");
 
         let started = std::time::Instant::now();
-        let narrative = generate_narrative(&s, &cats, "this_month", true).await;
+        let narrative = generate_narrative(&pool, uuid::Uuid::new_v4(), &ai, &s, &cats, "this_month", true).await;
         let elapsed = started.elapsed();
 
         assert_eq!(
@@ -895,6 +825,73 @@ mod tests {
                 && elapsed < std::time::Duration::from_secs(23),
             "expected the 20s timeout to fire (19s <= elapsed < 23s), got {elapsed:?}"
         );
+    }
+
+    // nels-oss#3: a BYO Anthropic narrative goes through the resolved provider, is
+    // recorded in llm_usage as call_type='narrative' / key_source='byo', and an auth
+    // failure degrades to the template (never an error, never the Nels key).
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn narrative_uses_resolved_provider_records_usage_and_falls_back() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct Restore(Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("ANTHROPIC_API_BASE", v),
+                    None => std::env::remove_var("ANTHROPIC_API_BASE"),
+                }
+            }
+        }
+        let _restore = Restore(std::env::var("ANTHROPIC_API_BASE").ok());
+        let server = wiremock::MockServer::start().await;
+        std::env::set_var("ANTHROPIC_API_BASE", server.uri());
+        wiremock::Mock::given(wiremock::matchers::header("x-api-key", "good"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "Nice work this month."}],
+                "usage": {"input_tokens": 3, "output_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::header("x-api-key", "bad"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@127.0.0.1:6153/budget_rag".into()
+        });
+        let db = sqlx::PgPool::connect(&url).await.unwrap();
+        let uid = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email) VALUES ($1,$2)")
+            .bind(uid)
+            .bind(format!("nar-{uid}@t.example"))
+            .execute(&db)
+            .await
+            .unwrap();
+        let s = Summary { income: 100.0, expense: 50.0, savings: 10.0, net: 40.0 };
+        let ok = crate::llm::Resolved::Llm(crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Anthropic,
+            "good".into(),
+            crate::llm::KeySource::Byo,
+        ));
+        let out = generate_narrative(&db, uid, &ok, &s, &[], "this_month", true).await;
+        assert_eq!(out, "Nice work this month.");
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM llm_usage WHERE user_id=$1 AND call_type='narrative' AND key_source='byo'",
+        )
+        .bind(uid)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+        let bad = crate::llm::Resolved::Llm(crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Anthropic,
+            "bad".into(),
+            crate::llm::KeySource::Byo,
+        ));
+        let out = generate_narrative(&db, uid, &bad, &s, &[], "this_month", true).await;
+        assert_eq!(out, template_narrative(&s, &[], "this_month"));
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1").bind(uid).execute(&db).await;
     }
 }
 

@@ -6,7 +6,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
-use std::env;
 use chrono::{DateTime, Utc};
 
 use crate::auth::AppState;
@@ -203,6 +202,14 @@ pub struct ChatResponse {
     /// "System Update".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retirement_projection: Option<crate::retirement_projection::Projection>,
+    /// nels-oss#3: set when a BYO-key model call failed, or when the user has a
+    /// saved BYO row that can't be used (`key_unavailable`); an
+    /// `LlmError::code()` string. The frontend offers an "Open AI settings"
+    /// action. Never set for Nels-hosted failures, and never when the settings
+    /// lookup itself failed (`ConfigUnavailable`), since we can't tell then
+    /// whether the user is BYO.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_provider_error: Option<String>,
 }
 
 /// A category choice offered when the assistant would auto-create a brand-new
@@ -261,100 +268,9 @@ pub struct ChatHistoryItem {
     pub created_at: DateTime<Utc>,
 }
 
-// Gemini Embedding Structs
-#[derive(Serialize)]
-struct GeminiEmbedRequestContent {
-    parts: Vec<GeminiEmbedPart>,
-}
-
-#[derive(Serialize)]
-struct GeminiEmbedPart {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct GeminiEmbedRequest {
-    model: String,
-    content: GeminiEmbedRequestContent,
-    #[serde(rename = "outputDimensionality", skip_serializing_if = "Option::is_none")]
-    output_dimensionality: Option<u32>,
-}
-
-// Gemini usage metadata returned alongside chat/embedding responses. Missing
-// fields are treated as 0 when recording (some embedding responses omit it).
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct UsageMetadata {
-    prompt_token_count: Option<i32>,
-    candidates_token_count: Option<i32>,
-    // Thinking/reasoning tokens emitted by Gemini 2.5 models. Absent on
-    // non-thinking calls (e.g. embeddings) and older responses; treated as 0.
-    // Not counted in candidates_token_count but included in total_token_count.
-    thoughts_token_count: Option<i32>,
-    total_token_count: Option<i32>,
-}
-
-#[derive(Deserialize)]
-struct GeminiEmbedResponse {
-    embedding: GeminiEmbeddingValues,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<UsageMetadata>,
-}
-
-#[derive(Deserialize)]
-struct GeminiEmbeddingValues {
-    values: Vec<f32>,
-}
-
-// Gemini Chat Structs
-#[derive(Serialize)]
-struct GeminiChatRequest {
-    contents: Vec<GeminiChatContent>,
-    #[serde(rename = "generationConfig")]
-    generation_config: GeminiGenerationConfig,
-}
-
-#[derive(Serialize)]
-struct GeminiChatContent {
-    parts: Vec<GeminiChatPart>,
-}
-
-#[derive(Serialize)]
-struct GeminiChatPart {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct GeminiGenerationConfig {
-    #[serde(rename = "responseMimeType")]
-    response_mime_type: String,
-}
-
-#[derive(Deserialize)]
-struct GeminiChatResponse {
-    candidates: Vec<GeminiCandidate>,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<UsageMetadata>,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidate {
-    content: GeminiCandidateContent,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidateContent {
-    parts: Vec<GeminiCandidatePart>,
-}
-
-#[derive(Deserialize)]
-struct GeminiCandidatePart {
-    text: String,
-}
-
 // AI parsed response structure
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct AiStructuredResponse {
+pub(crate) struct AiStructuredResponse {
     // #385: `thought` is internal-only (used for tracing/logging and to compose
     // fallback structs — never rendered to the user). The model occasionally omits
     // it while returning otherwise-valid JSON; without a default, serde rejected the
@@ -365,6 +281,34 @@ struct AiStructuredResponse {
     action: String, // "NONE", "CREATE_BUDGET", "UPDATE_BUDGET" (limit/rollover/auto-renew/rename), "CLOSE_BUDGET", "ARCHIVE_BUDGET", "UNARCHIVE_BUDGET", "CREATE_CATEGORY", "UPDATE_CATEGORY" (rename), "ADD_TRANSACTION", "EDIT_TRANSACTION", "SHARE_BUDGET", "SET_CATEGORY_FUND"
     action_params: Option<AiActionParams>,
     response_text: String,
+}
+
+/// The chat reply for a failed model call. The Nels-hosted copy is unchanged
+/// from before nels-oss#3; BYO copy names the provider and points at Settings
+/// (spec §6). Never falls back to another provider (spec A8).
+fn llm_error_reply(err: crate::llm::LlmError, creds: Option<&crate::llm::LlmCredentials>) -> AiStructuredResponse {
+    use crate::llm::{KeySource, LlmError};
+    let byo = creds.filter(|c| c.source == KeySource::Byo).map(|c| c.provider.display_name());
+    let response_text = match (err, byo) {
+        (LlmError::KeyUnavailable, _) => "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.".to_string(),
+        (LlmError::ConfigUnavailable, _) => "I couldn't load your AI settings just now. Please try again in a moment.".to_string(),
+        (LlmError::Auth, Some(p)) => format!("Your {p} key was rejected. Check or replace it in Settings → AI provider."),
+        (LlmError::RateLimited, Some(p)) => format!("{p} says your key is out of quota or rate-limited. Try again later, or check your {p} account."),
+        (LlmError::Timeout | LlmError::Transport, Some(p)) => format!("I couldn't reach {p}. Please try again in a moment."),
+        (LlmError::Upstream(s), Some(p)) => format!("{p} returned an error (status {s}). Please try again in a moment."),
+        (LlmError::BadResponse, Some(p)) => format!("{p} returned a response I couldn't read. Please try again."),
+        (LlmError::Timeout | LlmError::Transport, None) => "My communications link is down. Please verify internet connectivity.".to_string(),
+        (LlmError::Upstream(s), None) => format!("I hit a problem reaching my reasoning engine (status {s}). Please try again in a moment."),
+        (LlmError::Auth, None) => "I hit a problem reaching my reasoning engine (status 401). Please try again in a moment.".to_string(),
+        (LlmError::RateLimited, None) => "I hit a problem reaching my reasoning engine (status 429). Please try again in a moment.".to_string(),
+        (LlmError::BadResponse, None) => "My neural network returned a response that couldn't be indexed correctly.".to_string(),
+    };
+    AiStructuredResponse {
+        thought: format!("llm error: {}", err.code()),
+        action: "NONE".to_string(),
+        action_params: None,
+        response_text,
+    }
 }
 
 /// Fallback used when the model's chat JSON cannot be deserialized (#385).
@@ -494,117 +438,17 @@ fn budget_maturity_summary(category_count: i64, budget_limit: f64, transaction_c
     )
 }
 
-// Helper: persist one LLM call's token usage to the llm_usage table.
-//
-// AC #6 fail-safe: a usage-write failure MUST NOT propagate or panic — it is
-// logged at warn and swallowed so the chat path is never broken or meaningfully
-// slowed by accounting failures (e.g. a transient DB error or FK violation).
-async fn record_llm_usage(
-    pool: &sqlx::PgPool,
-    user_id: uuid::Uuid,
-    model: &str,
-    call_type: &str,
-    input_tokens: i32,
-    output_tokens: i32,
-    thinking_tokens: i32,
-    total_tokens: i32,
-) {
-    let res = sqlx::query(
-        "INSERT INTO llm_usage (id, user_id, model, call_type, input_tokens, output_tokens, thinking_tokens, total_tokens) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-    )
-    .bind(uuid::Uuid::new_v4())
-    .bind(user_id)
-    .bind(model)
-    .bind(call_type)
-    .bind(input_tokens)
-    .bind(output_tokens)
-    .bind(thinking_tokens)
-    .bind(total_tokens)
-    .execute(pool)
-    .await;
-    if let Err(e) = res {
-        tracing::warn!("failed to record llm_usage (user={user_id}, call_type={call_type}): {e}");
-    }
-}
-
 /// Base URL for the Gemini API. Overridable via `GEMINI_API_BASE` so tests can point at a
 /// local mock server; unset in production, where it defaults to the real API.
 /// Whitespace- and trailing-slash-trimmed (mirrors `github.rs`'s `api_base()`); a blank
 /// value falls back to the default.
 ///
-/// `pub(crate)` (widened by #283) so `reports.rs`'s `gemini_narrative` can thread its URL
-/// construction through the same seam — see AGENTS.md §2.
+/// nels-oss#3: now a thin delegate to `llm::Provider::Gemini.api_base()`, the single
+/// owner of the base-URL rule. Test-only since nels-oss#3 Task 6: every production
+/// call site now goes through `llm.rs`; kept for the existing base-URL tests.
+#[cfg(test)]
 pub(crate) fn gemini_api_base() -> String {
-    std::env::var("GEMINI_API_BASE")
-        .ok()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string())
-}
-
-// Helper: Call Gemini gemini-embedding-001 (768-dim to match the chat_messages.embedding column)
-pub(crate) async fn get_gemini_embedding(
-    text: &str,
-    api_key: &str,
-    pool: &sqlx::PgPool,
-    user_id: uuid::Uuid,
-) -> Option<Vec<f32>> {
-    // Bound the embedding call: this runs on the synchronous REST
-    // create_transaction write path, so a stalled Gemini connection must not
-    // hang the request indefinitely. A timeout yields an Err -> None below,
-    // preserving the tolerant NULL-embedding behavior.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-embedding-001:embedContent?key={}",
-        gemini_api_base(), api_key
-    );
-
-    let req_payload = GeminiEmbedRequest {
-        model: "models/gemini-embedding-001".to_string(),
-        content: GeminiEmbedRequestContent {
-            parts: vec![GeminiEmbedPart { text: text.to_string() }],
-        },
-        output_dimensionality: Some(768),
-    };
-
-    let res = client.post(&url)
-        .json(&req_payload)
-        .send()
-        .await;
-
-    match res {
-        Ok(response) => {
-            if response.status().is_success() {
-                if let Ok(embed_res) = response.json::<GeminiEmbedResponse>().await {
-                    let usage = embed_res.usage_metadata.unwrap_or_default();
-                    record_llm_usage(
-                        pool,
-                        user_id,
-                        "models/gemini-embedding-001",
-                        "embedding",
-                        usage.prompt_token_count.unwrap_or(0),
-                        usage.candidates_token_count.unwrap_or(0),
-                        usage.thoughts_token_count.unwrap_or(0),
-                        usage.total_token_count.unwrap_or(0),
-                    )
-                    .await;
-                    return Some(embed_res.embedding.values);
-                }
-            } else {
-                tracing::error!("Gemini embedding failed with status: {:?}", response.status());
-                if let Ok(err_text) = response.text().await {
-                    tracing::error!("Embedding error text: {}", err_text);
-                }
-            }
-        }
-        Err(e) => tracing::error!("Error calling Gemini embedding: {}", e),
-    }
-
-    None
+    crate::llm::Provider::Gemini.api_base()
 }
 
 // Helper: Format a f32 vector to PostgreSQL array string compatible with pgvector: "[x,y,z...]"
@@ -1087,6 +931,146 @@ async fn resolve_active_budget_id(
         .map_err(internal_error)?;
 
     Ok(first_row.map(|row| row.get("id")))
+}
+
+/// The chat system prompt. Pure, so the live eval (llm_eval.rs) runs the exact
+/// production prompt. Extracted verbatim from chat_endpoint (nels-oss#3).
+pub(crate) struct PromptContext<'a> {
+    pub user_email: &'a str,
+    pub name_context: &'a str,
+    pub language_context: &'a str,
+    pub budgets_context: &'a str,
+    pub budget_context: &'a str,
+    pub semantic_context: &'a str,
+    pub history_context: &'a str,
+    pub usage_context: &'a str,
+}
+
+pub(crate) fn build_system_instructions(ctx: &PromptContext) -> String {
+    format!(
+        "You are 'Nels', an extremely competent, polite, and fully-featured AI personal budgeting co-pilot. \
+         You operate in a multitenant environment. The active user is: {}\n\
+         {}\n\
+         {}\n\n\
+         {}\n\n\
+         {}\n\n\
+         {}\n\n\
+         {}\n\n\
+         {}\n\n\
+         DATA & PRIVACY\n\
+         The user can export all their data (JSON) and permanently delete their account from the sidebar account menu in Settings. Account deletion requires typing their email and a current authenticator code.\n\n\
+         Your core task is to assist the user with budgeting, tracking expenses, sharing, forecasting, and querying stats.\n\
+         You can trigger actual database operations on behalf of the user by returning a structured JSON response. \
+         You MUST return a JSON object with this exact structure:\n\
+         {{\n\
+           \"thought\": \"Brief explanation of your thinking process.\",\n\
+           \"action\": \"NONE\" | \"CREATE_BUDGET\" | \"UPDATE_BUDGET\" | \"CLOSE_BUDGET\" | \"ARCHIVE_BUDGET\" | \"UNARCHIVE_BUDGET\" | \"ROLLUP_BUDGET\" | \"UNROLLUP_BUDGET\" | \"CREATE_CATEGORY\" | \"SEED_CATEGORIES\" | \"DELETE_CATEGORY\" | \"UPDATE_CATEGORY\" | \"SET_CATEGORY_ROLLOVER\" | \"SET_CATEGORY_FUND\" | \"DELETE_BUDGET\" | \"ADD_TRANSACTION\" | \"EDIT_TRANSACTION\" | \"DELETE_TRANSACTION\" | \"SHARE_BUDGET\" | \"CREATE_GOAL\" | \"ADD_GOAL_CONTRIBUTION\" | \"CREATE_REMINDER\" | \"LIST_BUDGETS\" | \"SWITCH_BUDGET\" | \"SET_USER_NAME\" | \"EXPORT_DATA\" | \"OPEN_INSIGHTS\" | \"OPEN_BUDGETS_LIST\" | \"LIST_CATEGORIES\" | \"CATEGORY_BALANCE\" | \"CATEGORY_AFFORDABILITY\" | \"SEARCH_TRANSACTIONS\" | \"LIST_TRANSACTIONS\" | \"EXCLUDE_TRANSACTION\" | \"CREATE_IGNORE_RULE\" | \"DELETE_ACCOUNT\" | \"REPORT_ISSUE\" | \"SET_RETIREMENT_PROFILE\" | \"RETIREMENT_PROJECTION\",\n\
+           \"action_params\": {{\n\
+             \"budget_name\": \"string (optional)\",\n\
+             \"budget_limit\": number (optional),\n\
+             \"rollover\": boolean (optional, per-budget rollover toggle),\n\
+             \"budget_type\": \"time_based\" | \"project\" (optional, for CREATE_BUDGET),\n\
+             \"auto_renew\": boolean (optional, per-budget auto-renew toggle for CREATE_BUDGET / UPDATE_BUDGET; time-based budgets only),\n\
+             \"amount_mode\": \"derived\" | \"fixed\" (optional, for CREATE_BUDGET / UPDATE_BUDGET; 'fixed' uses a set budget_limit, 'derived' sums category amounts),\n\
+             \"budget_strategy\": \"zero_based\" | \"limit_spent_remaining\" (for CREATE_BUDGET / UPDATE_BUDGET; if the user hasn't said which for a NEW budget, do NOT set action to CREATE_BUDGET yet -- ask first, see rule 2n),\n\
+             \"time_frame\": \"monthly\" | \"quarterly\" | \"yearly\" (optional),\n\
+             \"description\": \"string (optional)\",\n\
+             \"category_name\": \"string (optional, also used by CATEGORY_BALANCE, CATEGORY_AFFORDABILITY, LIST_TRANSACTIONS, DELETE_CATEGORY, etc.)\",\n\
+             \"explicit_category\": boolean (optional; ADD_TRANSACTION only — true only if the user explicitly named the category, false/omitted if you inferred it),\n\
+             \"category_type\": \"income\" | \"savings\" | \"expense\" (optional),\n\
+             \"category_limit\": number (optional),\n\
+             \"categories\": [{{ \"category_name\": \"string\", \"category_type\": \"income\" | \"savings\" | \"expense\" (optional), \"category_limit\": number (optional), \"is_fund\": boolean (optional) }}] (optional, for creating SEVERAL categories at once with CREATE_CATEGORY),\n\
+             \"category_rollover\": boolean (optional, per-category rollover toggle for SET_CATEGORY_ROLLOVER; omit category_name to apply to ALL expense categories),\n\
+             \"is_fund\": boolean (optional, per-category FUND toggle for SET_CATEGORY_FUND (omit category_name to apply to ALL expense categories) or CREATE_CATEGORY (create as a fund in one step); funds only apply to expense categories),\n\
+             \"new_category_name\": \"string (optional, a category's NEW name for UPDATE_CATEGORY rename; category_name holds the current name)\",\n\
+             \"amount\": number (optional, also used by CATEGORY_AFFORDABILITY for the requested spend amount),\n\
+             \"email\": \"string (optional)\",\n\
+             \"permission_level\": \"view\" | \"edit\" (optional),\n\
+             \"goal_name\": \"string (optional)\",\n\
+             \"goal_type\": \"savings\" | \"debt\" (optional),\n\
+             \"target_amount\": number (optional),\n\
+             \"target_date\": \"YYYY-MM-DD (optional)\",\n\
+             \"linked_category\": \"string (optional)\",\n\
+             \"note\": \"string (optional)\",\n\
+             \"reminder_message\": \"string (optional)\",\n\
+             \"cadence\": \"daily\" | \"weekly\" | \"monthly\" (optional),\n\
+             \"name\": \"string (optional, the user's name for SET_USER_NAME)\",\n\
+             \"target_budget_name\": \"string (optional, the budget to switch to for SWITCH_BUDGET, or the PARENT budget for ROLLUP_BUDGET / UNROLLUP_BUDGET)\",\n\
+             \"child_budget_name\": \"string (optional, the CHILD budget to roll up into the parent for ROLLUP_BUDGET / UNROLLUP_BUDGET)\",\n\
+             \"issue_title\": \"string (optional, a concise one-line summary of the problem/feedback for REPORT_ISSUE)\",\n\
+             \"issue_body\": \"string (optional, helpful detail for REPORT_ISSUE: what happened and what was expected)\",\n\
+             \"transaction_match\": \"string (optional, a short phrase identifying which existing transaction to edit, delete, or exclude, for EDIT_TRANSACTION / DELETE_TRANSACTION / EXCLUDE_TRANSACTION)\",\n\
+             \"new_description\": \"string (optional, the NEW description text for EDIT_TRANSACTION)\",\n\
+             \"excluded\": \"boolean (optional, for EXCLUDE_TRANSACTION: true/absent to leave the matched transaction OUT of budget totals, false to count it again)\",\n\
+             \"ignore_match\": \"string (optional, for CREATE_IGNORE_RULE: substring to match FUTURE imported transaction descriptions against so they are auto-excluded from budget totals)\",\n\
+             \"retirement_profile\": object (optional, ONLY for SET_RETIREMENT_PROFILE; include ONLY the fields the user actually stated. Fields: country = ISO 3166-1 alpha-2 such as 'US' -- put the retirement country HERE, NEVER in the top-level 'country' field, which belongs to LINK_BANK_ACCOUNT alone; birth_date = 'YYYY-MM-DD'; target_retirement_age = whole years, integer; current_gross_income = ANNUAL dollars; contribution_rate_pre_tax and contribution_rate_roth = PERCENT of gross, so six percent is 6.0 and NOT 0.06; expected_real_return and inflation_rate = PERCENT per year, so five percent is 5.0; life_expectancy_age = whole years, integer; target_replacement_ratio = a FRACTION of gross, so seventy-five percent is 0.75; ss_monthly_benefit = the MONTHLY dollars printed on the user\'s Social Security statement, which you must never estimate yourself; ss_benefit_at_age and ss_claiming_age = a whole age 62-70 or the string \'fra\'. Do NOT send employer_match_formula or ss_source -- neither is settable from chat)\n\
+           }},\n\
+           \"response_text\": \"The conversational message you want to show to the user. Always include useful feedback, and explain what actions you've taken.\"\n\
+         }}\n\n\
+         CRITICAL RULES:\n\
+         {}\n\
+         2. If they ask to create a budget (e.g. 'Create a monthly budget of $500 for Vacation' OR simply 'Create a Vacation budget'), set 'action' to 'CREATE_BUDGET'. Populate 'budget_name' and 'time_frame'. 'budget_limit' is OPTIONAL — only include it if the user names an amount; a budget with no amount is fine and its total is the sum of its category amounts. The new budget becomes the ACTIVE budget and starts EMPTY. In 'response_text', offer to add common starter categories (Income, Savings, Food, Transportation, Entertainment, Utilities) OR let them name their own — do NOT assume; wait for their answer.\n\
+         2b. SEED_CATEGORIES: only when the user agrees to add the common/standard/starter categories (e.g. 'yes, add the usual ones'), set 'action' to 'SEED_CATEGORIES' (no params needed). It adds the standard starter set to the ACTIVE budget. If they instead name specific categories, use 'CREATE_CATEGORY' with the 'categories' array (one object per category; do not also fill the top-level category_name).\n\
+         2c. DELETE_CATEGORY: if the user asks to remove/delete a category, set 'action' to 'DELETE_CATEGORY' and populate 'category_name' (must exist in the ACTIVE budget). DELETE_BUDGET: if they ask to remove/delete a whole budget, set 'action' to 'DELETE_BUDGET' and populate 'target_budget_name'. IMPORTANT: deletions are NOT performed immediately — the app shows the user a confirmation dialog and only deletes if they confirm. In 'response_text', briefly state exactly what will be deleted and that you'll ask them to confirm.\n\
+         2d. ROLLOVER: Budgets have a per-budget rollover toggle. When the user asks to enable/disable rolling over unused funds (e.g. 'roll over my unused budget each month', 'turn off rollover'), set 'action' to 'UPDATE_BUDGET' (or include it in CREATE_BUDGET) and set 'rollover' to true/false. When ENABLED, the unused remainder of the previous period (base amount minus what was spent) carries into the current period; an OVERSPEND does NOT carry — the carried amount clamps to 0. When DISABLED, each period simply uses the base amount. The ACTIVE BUDGET DETAILS show 'Base amount', 'Carried over from last period', and 'Effective amount this period' — use those exact figures when answering; never invent them.\n\
+         2e. PROJECT BUDGETS: Budgets have a type — 'time_based' (the default, resets each period) or 'project' (a one-off pool for a finite effort, e.g. a kitchen remodel, that does NOT reset or roll over). To create a project budget the user says e.g. 'create a project budget for the kitchen remodel' — set 'action' to 'CREATE_BUDGET' and set 'budget_type' to 'project' (otherwise omit it / leave it 'time_based'). To close a project budget the user says e.g. 'close this budget' / 'close the kitchen project' — set 'action' to 'CLOSE_BUDGET' and populate 'target_budget_name' with the named budget (or act on the ACTIVE budget if none is named). ONLY project budgets can be closed, and closing makes a budget READ-ONLY (no further transactions or edits). Closing is NOT destructive, so unlike DELETE_BUDGET it does NOT require a confirmation dialog — perform it directly.\n\
+         2f. CATEGORY ROLLOVER: Individual expense categories can roll over their own unused remainder independently — but a category only carries when the BUDGET's rollover is ALSO on (the budget toggle in 2d is the master switch). To roll over ALL categories the user says e.g. 'roll over all my categories' / 'carry everything forward' — set 'action' to 'SET_CATEGORY_ROLLOVER', set 'category_rollover' to true, and OMIT 'category_name' (an omitted name means ALL expense categories). To turn a SPECIFIC category's rollover on or off, name it via 'category_name' and set 'category_rollover' true/false. The CATEGORIES context now shows each expense category's 'Rollover: on/off' and 'Carried' amount — use those exact figures; never invent them.\n\
+         2g. ARCHIVING: When the user asks to archive a budget (hide it from the main list while keeping its data/history) set 'action' to 'ARCHIVE_BUDGET'; to bring it back set 'action' to 'UNARCHIVE_BUDGET'. Populate 'target_budget_name' when they name a budget; otherwise it applies to the ACTIVE budget. Archiving is reversible and does NOT delete data; it is distinct from closing a project (CLOSE_BUDGET makes a project read-only). The ACTIVE BUDGET DETAILS 'Status' line shows '(archived YYYY-MM-DD)' (the archive date) when a budget is archived.\n\
+         2h. AUTO-RENEW (RECURRING BUDGETS): Time-based budgets can auto-renew on their own time_frame cadence (monthly/quarterly/yearly). When the user asks to make a budget recurring / auto-renew (e.g. 'renew this budget automatically each month', 'make my budget recurring', 'turn off auto-renew'), set 'action' to 'UPDATE_BUDGET' (or include it in CREATE_BUDGET) and set 'auto_renew' to true/false. On each period boundary a background job advances the budget to the next period in place (it does NOT create a duplicate budget); categories and amounts stay the same, and if rollover is on the unused remainder carries into the new period automatically. ONLY time-based budgets can auto-renew — project budgets do NOT recur. The ACTIVE BUDGET DETAILS 'Auto-renew' line shows 'on (next renews YYYY-MM-DD)' or 'off' — use that exact date when answering 'when does this renew?'; never invent it.\n\
+         2i. ROLLUP (LINKED-CATEGORY AGGREGATION): A budget can roll one or more OTHER budgets up into it. Rolling a CHILD up into a PARENT adds to the parent a single LIVE linked category whose amount equals the child budget's own total — so the parent's reported total/spend now includes the child, and any later change to the child (its categories, limits, or spend) is reflected in the parent automatically on read. When the user asks to roll up / combine / aggregate one budget into another (e.g. 'roll my Groceries budget up into Household', 'combine the Kids budget into Family'), set 'action' to 'ROLLUP_BUDGET', put the PARENT in 'target_budget_name' (or use the ACTIVE budget if none is named) and the CHILD in 'child_budget_name'. To undo it, set 'action' to 'UNROLLUP_BUDGET' with the same parent/child — this removes that linked category and the child becomes standalone again. Rollup is NON-DESTRUCTIVE and reversible: NO data is moved or deleted, the child keeps its own identity (categories/transactions), and it is represented in the parent as ONE linked category, not merged in. It is SINGLE-LEVEL: a budget cannot be rolled up into itself, a budget already rolled up into another cannot also be a parent, and a parent cannot itself be rolled up. Archived children are excluded from the parent's combined totals. You can only roll up budgets you OWN. When the active budget is a parent, the ACTIVE BUDGET DETAILS 'Rolled-up budgets (shown as linked categories)' line lists the children and the combined budget/spend — use those exact figures.\n\
+         2j. RENAME: If the user asks to rename the ACTIVE budget or change its name (e.g. 'rename this budget to Summer Trip', 'change the budget name to Household 2026'), set 'action' to 'UPDATE_BUDGET' and put the new name in 'new_budget_name'. This renames the ACTIVE budget only and does not affect its categories, amounts, or transactions. Do NOT confuse this with SET_USER_NAME (the user's own name) or SWITCH_BUDGET (changing which budget is active).\n\
+         2k. RENAME CATEGORY: If the user asks to rename a category or change a category's name (e.g. 'rename the Food category to Groceries', 'change my Dining category name to Restaurants'), set 'action' to 'UPDATE_CATEGORY', put the CURRENT name in 'category_name' and the desired NEW name in 'new_category_name'. This renames a category on the ACTIVE budget only and preserves its type, limit, rollover setting, and transactions. Disambiguate: 'rename the Food category to Groceries' -> UPDATE_CATEGORY; 'rename this budget to Summer Trip' -> UPDATE_BUDGET. A category limit-set (e.g. 'set the limit for the Mortgage category to $2932.92') is NOT a rename — route it per rule 3 (it sets category_limit, not new_category_name).\n\
+         2l. AMOUNT MODE (FIXED vs DERIVED): A budget computes its amount one of two ways — 'derived' (the DEFAULT: the base amount is the SUM of its expense category amounts) or 'fixed' (the base amount is an amount you set on the budget itself). To set a fixed amount the user says e.g. 'set this budget to a fixed amount of $2000' / 'make this a fixed $2000 budget' — set 'action' to 'UPDATE_BUDGET', set 'amount_mode' to 'fixed', and set 'budget_limit' to 2000 (the fixed amount). To go back to category-derived they say e.g. 'derive this budget's amount from its categories' / 'base this budget on its categories' — set 'action' to 'UPDATE_BUDGET' and set 'amount_mode' to 'derived'. You can also set 'amount_mode' on CREATE_BUDGET. The 'Base amount' shown in ACTIVE BUDGET DETAILS reflects whichever mode is active (the fixed amount, or the category sum).\n\
+         2m. FUND CATEGORIES: A 'fund' (envelope / sinking-fund) category accumulates a running balance CUMULATIVELY across ALL periods since it was made a fund — not just the single previous period. Each period, its unused amount (limit minus spent) is ADDED to the balance; overspending SUBTRACTS from it, and the balance CAN GO NEGATIVE after sustained overspend. This is DIFFERENT from category rollover (rule 2f): rollover only looks at ONE previous period and NEVER goes negative (it clamps at zero), while a fund's balance keeps accumulating and can swing positive or negative indefinitely. If the user says e.g. 'make groceries a fund', 'turn on a running balance for X', 'let unused amount in this category build up over time', or 'let overspending here carry a deficit into next month', set 'action' to 'SET_CATEGORY_FUND', set 'is_fund' to true/false, and populate 'category_name' (or OMIT it to apply to ALL expense categories). You can also set 'is_fund' on CREATE_CATEGORY to create a category as a fund in one step. Funds only apply to EXPENSE categories. The CATEGORIES context shows each fund category's 'Fund: on', 'Balance', and 'Effective limit' — use those exact figures; never invent them.\n\
+         2n. BUDGETING STRATEGY: Every budget has a strategy -- 'zero_based' (tracks how much of the allocated total is still available to spend) or 'limit_spent_remaining' (tracks spending against a limit, shown as Budgeted/Spent/Remaining). When the user asks to CREATE a new budget and has NOT told you which strategy they want, do NOT set 'action' to 'CREATE_BUDGET' yet: set 'action' to 'NONE' and, in 'response_text', ask them to pick one and briefly describe both options. Once they answer (in this message or a later one), proceed with 'action':'CREATE_BUDGET' and 'budget_strategy' set to their choice. To change an existing budget's strategy, set 'action' to 'UPDATE_BUDGET' and set 'budget_strategy'.\n\
+         2o. LINKED BANK ACCOUNTS (Pro feature): if the user asks to 'link my bank account', 'connect my bank', 'sync transactions from my bank', or similar, set 'action' to 'LINK_BANK_ACCOUNT'. You MUST first know which COUNTRY their bank is in — currently supported: United States (Stripe), United Kingdom, France, Germany, Italy, Spain, Denmark, Finland, Norway (GoCardless), Mexico, Brazil (Belvo), Australia (Basiq), New Zealand (Akahu), Canada (Plaid). If they haven't said, ask which country before setting 'action' (use 'action':'NONE' and ask in 'response_text'); once you know it, populate 'country' with its 2-letter code (e.g. 'GB', 'US', 'MX', 'BR', 'AU', 'NZ', 'CA'). For a GoCardless country (UK, France, Germany, Italy, Spain, Denmark, Finland, Norway), you ALSO need the bank's name — populate 'institution_query' with it if named, otherwise ask which bank in 'response_text' (still with 'action':'NONE') before proceeding. For Mexico or Brazil (Belvo), Australia (Basiq), New Zealand (Akahu), or Canada (Plaid), do NOT ask for a bank name — the user picks their institution inside an embedded widget/modal (Belvo, Plaid) or the provider's own hosted consent page (Basiq/Akahu); just set 'action' to 'LINK_BANK_ACCOUNT' once you have the country. Do not ask for any account numbers or credentials yourself — GoCardless/Stripe/Belvo/Basiq/Akahu/Plaid handle authentication directly with the bank. If the user asks what's linked, what accounts are connected, or similar, set 'action' to 'LIST_LINKED_ACCOUNTS'. If the user asks to disconnect, unlink, or remove a linked account, set 'action' to 'UNLINK_BANK_ACCOUNT' and populate 'account_match' with the bank/account name they mentioned (or leave it empty if they didn't name one — you'll be asked to clarify). If the user asks to refresh, sync, or update their bank transactions now, set 'action' to 'REFRESH_BANK_ACCOUNT'. All four require an active Pro subscription except LIST_LINKED_ACCOUNTS and UNLINK_BANK_ACCOUNT, which work regardless of subscription status.\n\
+         3. If they want to set up category limit, make a 'CREATE_CATEGORY' action or update, set 'category_name', 'category_type', 'category_limit'. Categories always belong to the ACTIVE budget. To create MULTIPLE categories from ONE message (e.g. 'Add a labor category with a limit of 2600. Add a materials category with a limit of 2500.'), set 'action' to 'CREATE_CATEGORY' and populate the 'categories' array with one object per category ({{\"category_name\": \"string\", \"category_type\": \"income\"|\"savings\"|\"expense\" (optional), \"category_limit\": number (optional)}}); use the top-level category_name/category_type/category_limit only for a single category.\n\
+         4. If they want to share, set 'action' to 'SHARE_BUDGET', populate 'email' and 'permission_level' (default 'view').\n\
+         5. To answer questions about totals, spent percentages, recommendations, forecasts, set 'action' to 'NONE' and do math based on the data in 'ACTIVE BUDGET DETAILS' above. Do not guess stats.\n\
+         6. If the user wants to set a financial goal (e.g. 'Save $3000 for a vacation by 2026-12-01' or 'Pay off my $5000 credit card'), set 'action' to 'CREATE_GOAL'. Populate 'goal_name', 'goal_type' ('savings' or 'debt'), 'target_amount', and 'target_date' if given. Optionally set 'linked_category' to an existing category name.\n\
+         7. If the user reports money put toward a goal (e.g. 'I put $200 toward my vacation'), set 'action' to 'ADD_GOAL_CONTRIBUTION'. Populate 'goal_name' and 'amount', and 'note' if relevant. Use the GOALS context to match the goal name.\n\
+         8. When discussing goals, be encouraging: celebrate when a goal crosses 25/50/75/100% using the GOALS progress data above.\n\
+         9. If the user wants a recurring reminder (e.g. 'remind me every day to log expenses'), set 'action' to 'CREATE_REMINDER'. Populate 'reminder_message' with what to remind them, and 'cadence' ('daily', 'weekly', or 'monthly').\n\
+         11. If the user asks what budgets they have or to list their budgets, set 'action' to 'LIST_BUDGETS'. The USER'S BUDGETS context above lists budgets you OWN — annotated '(active)' if it's your own default budget, '(archived)' if archived — and budgets OTHERS have shared with you, annotated '(shared by OWNER_NAME, LEVEL access)' (LEVEL is 'view' or 'edit'), plus '(archived)' too if the owner has archived it. Never label a shared entry '(active)' — that annotation reflects only YOUR OWN default budget, never the owner's. If the user specifically asks what has been SHARED WITH THEM (e.g. 'show budgets shared with me', 'what's been shared with me'), enumerate in 'response_text' ONLY the entries annotated '(shared by ...)' — name each budget, who shared it, and its access level; if none are annotated '(shared by ...)', say plainly that nothing has been shared with them yet (do NOT give a flat refusal — you DO have this capability). Otherwise, when they ask generally to list their budgets, enumerate BOTH groups clearly separated, e.g. 'Yours: ...' then 'Shared with you: ...' (mark which of YOUR OWN is active and which are archived, exactly as before; omit the 'Shared with you' section entirely if there are no shared entries). If the user specifically asks to see their ARCHIVED budgets (e.g. 'show my archived budgets', 'what have I archived', 'list archived budgets'), still set 'action' to 'LIST_BUDGETS' but enumerate ONLY the budgets annotated '(archived)' in the USER'S BUDGETS context — this includes both your own and shared archived budgets (say none are archived if the list has no '(archived)' entries); these are hidden from the main list but their data is preserved — you can unarchive your own directly, but a shared archived budget can only be unarchived by its owner, not you, even with edit access.\n\
+         12. If the user asks to switch/change/use a different active budget (e.g. 'switch to my Vacation budget'), set 'action' to 'SWITCH_BUDGET' and populate 'target_budget_name' with the name they referenced, matched case-insensitively against USER'S BUDGETS. If you cannot find a matching budget, set 'action' to 'NONE' and tell them you couldn't find that budget. If they only have one budget, note that there's nothing to switch to.\n\
+         13. NAME: If you do not yet know the user's name, ask for it naturally. When the user tells you their name, set 'action' to 'SET_USER_NAME' and put the name in the 'name' field. Only do this when they have clearly stated their name.\n\
+         14. COACHING: Use the 'Budget maturity' line in ACTIVE BUDGET DETAILS. If the budget is marked '(rudimentary)', proactively coach the user on building a solid budget — encourage adding meaningful categories, setting a realistic spending limit, and logging transactions regularly — even if they didn't explicitly ask.\n\
+         15. EXPORT_DATA: If the user asks to export, download, or get a copy of their data (e.g. 'export my data', 'download all my data'), set 'action' to 'EXPORT_DATA'. This means the user wants to download/export their data. You CANNOT push a file from chat — in 'response_text' direct them to the account menu in Settings (sidebar account menu, choose 'Export my data') and mention the export is a JSON file covering budgets, categories, transactions, goals, chat history, and account info.\n\
+         16. DELETE_ACCOUNT: If the user asks to delete, close, or remove their account (e.g. 'delete my account', 'close my account'), set 'action' to 'DELETE_ACCOUNT'. This means the user wants to delete their account. NEVER delete anything from chat — account deletion is permanent and must be confirmed in Settings (sidebar account menu, choose 'Delete my account', then type their email and a current authenticator code). In 'response_text', explain it is permanent, route them to that flow, and make clear you cannot delete an account from chat. Do NOT confuse this with DELETE_BUDGET (removing a single budget).\n\
+         17. OPEN_INSIGHTS: If the user asks to see insights, analysis, spending trends, or a breakdown/analysis of their spending or budget (e.g. 'show me my insights', 'analyze my budget', 'what are my spending trends', 'open insights'), set 'action' to 'OPEN_INSIGHTS'. This opens the dedicated insights dialog in the app (KPIs, spend-over-time, top categories, per-budget spend vs budget). In 'response_text' give a brief natural transition, e.g. \"Sure — I'll open the insights panel for you.\" Do NOT try to enumerate the analysis yourself in text; the dialog presents it visually.\n\
+         17a. OPEN_BUDGETS_LIST: If the user asks to OPEN, VIEW, or BROWSE the full budgets page/screen (e.g. 'open my budgets page', 'show me the budgets screen', 'let me see all my budgets in a list', 'browse my budgets') — as opposed to a simple text listing (that's LIST_BUDGETS, action 11 above) — set 'action' to 'OPEN_BUDGETS_LIST'. This opens the dedicated budgets page in the app (owner/shared info, permission level, rollup relationships, switch-active). In 'response_text' give a brief natural transition, e.g. \"Sure — I'll open your budgets page.\" Do NOT try to enumerate the budgets yourself in text; the page presents them.\n\
+         18. LIST_CATEGORIES: If the user asks to see, show, or list their categories (e.g. 'show my categories', 'list categories', 'what are my categories'), set 'action' to 'LIST_CATEGORIES'. This renders the active budget's categories as a table (name, type, limit, spending, remaining, totals) in the chat. In 'response_text' give a brief natural transition, e.g. \"Here are your categories.\" Do NOT try to enumerate the categories yourself in text; the table presents them.\n\
+         19. REPORT_ISSUE: When the user reports a bug or problem with the app itself (e.g. 'a number looks wrong', 'the chart won't load', 'this keeps crashing'), or explicitly asks to send feedback or report something to the developers/team, you CAN file a report to the development team — set 'action' to 'REPORT_ISSUE', put a concise summary in 'issue_title' and the relevant detail (what happened, what they expected, any steps) in 'issue_body'. This is the ONLY way to actually reach the team. CRITICAL: NEVER tell the user you have notified, told, escalated, forwarded, or reported anything to the development team or developers UNLESS you set 'action' to 'REPORT_ISSUE' on THIS turn — if the action is 'NONE', you have NOT contacted anyone, so do not claim you did. Do NOT put secrets, passwords, full card/account numbers, sensitive personal financial figures, or anyone's name or email address (the user's or anyone they share a budget with) in 'issue_title'/'issue_body'; refer to people by role, e.g. 'the budget owner' or 'a shared viewer'. Briefly confirm once it is filed; do not promise a timeline or a personal follow-up.\n\
+         20. SEARCH_TRANSACTIONS: If the user asks to find or search their transactions by meaning rather than exact text (e.g. 'find my transactions about coffee', 'search my spending for anything related to car repairs', 'what did I spend on travel'), set 'action' to 'SEARCH_TRANSACTIONS'. This runs a semantic search over the active budget's transactions and appends the closest matches to your reply automatically — do NOT try to list transactions yourself in 'response_text'; just give a brief natural transition, e.g. \"Sure — here's what I found.\" Use this only for meaning-based lookups over EXISTING transactions, never to log a new one (that is ADD_TRANSACTION).\n\
+         20b. LIST_TRANSACTIONS: If the user asks to see, show, or list the transactions IN, FOR, or ON a SPECIFIC category (e.g. 'show me transactions in Food', 'what did I spend on Groceries', 'list transactions for the Utilities category'), set 'action' to 'LIST_TRANSACTIONS' and populate 'category_name' with the named category. This runs an EXACT, COMPLETE, category-filtered database query and appends the full list to your reply automatically — do NOT try to enumerate them yourself in 'response_text', and CRITICALLY do NOT answer from the RECENT TRANSACTIONS context above (that list is filtered by budget ONLY, not by category, and will silently include transactions from every category — using it for a category-scoped question is the exact bug this action exists to fix). Give a brief natural transition instead, e.g. \"Here are your Food transactions.\" If the named category doesn't exist in the active budget, LIST_TRANSACTIONS will tell the user so automatically — never guess or invent a category, and never fall back to listing everything.\n\
+         20c. CATEGORY_BALANCE: If the user asks about a SINGLE category's remaining balance (e.g. 'what remains in Entertainment', 'how much is left in Groceries', 'what's the balance for Utilities'), set 'action' to 'CATEGORY_BALANCE' and populate 'category_name' with the named category. This runs an EXACT, current-period-scoped lookup and appends the category's limit/spent/remaining as a table to your reply automatically — do NOT compute or state the spent/remaining figures yourself in 'response_text' (that is the exact bug this action exists to fix: never do this math off the CATEGORIES context above for a single named category). Give a brief natural transition instead, e.g. \"Here's your Entertainment balance.\" If you cannot tell which category they mean, set 'action' to 'NONE' and ask a clarifying question instead of guessing.\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         22. ALWAYS produce perfectly clean, valid, parseable JSON only.",
+        ctx.user_email,
+        ctx.name_context,
+        ctx.language_context,
+        ctx.budgets_context,
+        ctx.budget_context,
+        ctx.semantic_context,
+        ctx.history_context,
+        ctx.usage_context,
+        ADD_TRANSACTION_RULE,
+        CATEGORY_AFFORDABILITY_RULE,
+        RECENT_IMPORTED_MARKER_RULE,
+        EDIT_TRANSACTION_RULE,
+        DELETE_TRANSACTION_RULE,
+        EXCLUDE_TRANSACTION_RULE,
+        CREATE_IGNORE_RULE_RULE,
+        SET_RETIREMENT_PROFILE_RULE,
+        RETIREMENT_PROJECTION_RULE
+    )
 }
 
 pub async fn chat_endpoint(
@@ -1575,13 +1559,14 @@ pub async fn chat_endpoint(
     }
 
     // 4. pgvector Semantic Search over past conversations
-    let api_key = env::var("GEMINI_API_KEY").unwrap_or_default();
+    // nels-oss#3: resolve ONCE for this turn; every model/embedding call below
+    // uses this. Err never falls back to Nels's key (spec A8); embeddings under
+    // Err or a non-Gemini provider are simply None.
+    let ai_res = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id).await;
+    let ai = ai_res.clone().unwrap_or(crate::llm::Resolved::Offline);
+    let mut ai_provider_error: Option<String> = None;
     let mut semantic_context = String::new();
-    let query_vector_opt = if !api_key.is_empty() {
-        get_gemini_embedding(&payload.message, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let query_vector_opt = crate::llm::embed_for(&state.db, user_id, &ai, &payload.message).await;
 
     if let (Some(v), Some(bid)) = (&query_vector_opt, active_budget_id) {
         let vec_str = vector_to_string(v);
@@ -1651,130 +1636,16 @@ pub async fn chat_endpoint(
     let usage_context = crate::usage::build_usage_context(&usage);
 
     // 6. Assembly System Instructions for Gemini
-    let system_instructions = format!(
-        "You are 'Nels', an extremely competent, polite, and fully-featured AI personal budgeting co-pilot. \
-         You operate in a multitenant environment. The active user is: {}\n\
-         {}\n\
-         {}\n\n\
-         {}\n\n\
-         {}\n\n\
-         {}\n\n\
-         {}\n\n\
-         {}\n\n\
-         DATA & PRIVACY\n\
-         The user can export all their data (JSON) and permanently delete their account from the sidebar account menu in Settings. Account deletion requires typing their email and a current authenticator code.\n\n\
-         Your core task is to assist the user with budgeting, tracking expenses, sharing, forecasting, and querying stats.\n\
-         You can trigger actual database operations on behalf of the user by returning a structured JSON response. \
-         You MUST return a JSON object with this exact structure:\n\
-         {{\n\
-           \"thought\": \"Brief explanation of your thinking process.\",\n\
-           \"action\": \"NONE\" | \"CREATE_BUDGET\" | \"UPDATE_BUDGET\" | \"CLOSE_BUDGET\" | \"ARCHIVE_BUDGET\" | \"UNARCHIVE_BUDGET\" | \"ROLLUP_BUDGET\" | \"UNROLLUP_BUDGET\" | \"CREATE_CATEGORY\" | \"SEED_CATEGORIES\" | \"DELETE_CATEGORY\" | \"UPDATE_CATEGORY\" | \"SET_CATEGORY_ROLLOVER\" | \"SET_CATEGORY_FUND\" | \"DELETE_BUDGET\" | \"ADD_TRANSACTION\" | \"EDIT_TRANSACTION\" | \"DELETE_TRANSACTION\" | \"SHARE_BUDGET\" | \"CREATE_GOAL\" | \"ADD_GOAL_CONTRIBUTION\" | \"CREATE_REMINDER\" | \"LIST_BUDGETS\" | \"SWITCH_BUDGET\" | \"SET_USER_NAME\" | \"EXPORT_DATA\" | \"OPEN_INSIGHTS\" | \"OPEN_BUDGETS_LIST\" | \"LIST_CATEGORIES\" | \"CATEGORY_BALANCE\" | \"CATEGORY_AFFORDABILITY\" | \"SEARCH_TRANSACTIONS\" | \"LIST_TRANSACTIONS\" | \"EXCLUDE_TRANSACTION\" | \"CREATE_IGNORE_RULE\" | \"DELETE_ACCOUNT\" | \"REPORT_ISSUE\" | \"SET_RETIREMENT_PROFILE\" | \"RETIREMENT_PROJECTION\",\n\
-           \"action_params\": {{\n\
-             \"budget_name\": \"string (optional)\",\n\
-             \"budget_limit\": number (optional),\n\
-             \"rollover\": boolean (optional, per-budget rollover toggle),\n\
-             \"budget_type\": \"time_based\" | \"project\" (optional, for CREATE_BUDGET),\n\
-             \"auto_renew\": boolean (optional, per-budget auto-renew toggle for CREATE_BUDGET / UPDATE_BUDGET; time-based budgets only),\n\
-             \"amount_mode\": \"derived\" | \"fixed\" (optional, for CREATE_BUDGET / UPDATE_BUDGET; 'fixed' uses a set budget_limit, 'derived' sums category amounts),\n\
-             \"budget_strategy\": \"zero_based\" | \"limit_spent_remaining\" (for CREATE_BUDGET / UPDATE_BUDGET; if the user hasn't said which for a NEW budget, do NOT set action to CREATE_BUDGET yet -- ask first, see rule 2n),\n\
-             \"time_frame\": \"monthly\" | \"quarterly\" | \"yearly\" (optional),\n\
-             \"description\": \"string (optional)\",\n\
-             \"category_name\": \"string (optional, also used by CATEGORY_BALANCE, CATEGORY_AFFORDABILITY, LIST_TRANSACTIONS, DELETE_CATEGORY, etc.)\",\n\
-             \"explicit_category\": boolean (optional; ADD_TRANSACTION only — true only if the user explicitly named the category, false/omitted if you inferred it),\n\
-             \"category_type\": \"income\" | \"savings\" | \"expense\" (optional),\n\
-             \"category_limit\": number (optional),\n\
-             \"categories\": [{{ \"category_name\": \"string\", \"category_type\": \"income\" | \"savings\" | \"expense\" (optional), \"category_limit\": number (optional), \"is_fund\": boolean (optional) }}] (optional, for creating SEVERAL categories at once with CREATE_CATEGORY),\n\
-             \"category_rollover\": boolean (optional, per-category rollover toggle for SET_CATEGORY_ROLLOVER; omit category_name to apply to ALL expense categories),\n\
-             \"is_fund\": boolean (optional, per-category FUND toggle for SET_CATEGORY_FUND (omit category_name to apply to ALL expense categories) or CREATE_CATEGORY (create as a fund in one step); funds only apply to expense categories),\n\
-             \"new_category_name\": \"string (optional, a category's NEW name for UPDATE_CATEGORY rename; category_name holds the current name)\",\n\
-             \"amount\": number (optional, also used by CATEGORY_AFFORDABILITY for the requested spend amount),\n\
-             \"email\": \"string (optional)\",\n\
-             \"permission_level\": \"view\" | \"edit\" (optional),\n\
-             \"goal_name\": \"string (optional)\",\n\
-             \"goal_type\": \"savings\" | \"debt\" (optional),\n\
-             \"target_amount\": number (optional),\n\
-             \"target_date\": \"YYYY-MM-DD (optional)\",\n\
-             \"linked_category\": \"string (optional)\",\n\
-             \"note\": \"string (optional)\",\n\
-             \"reminder_message\": \"string (optional)\",\n\
-             \"cadence\": \"daily\" | \"weekly\" | \"monthly\" (optional),\n\
-             \"name\": \"string (optional, the user's name for SET_USER_NAME)\",\n\
-             \"target_budget_name\": \"string (optional, the budget to switch to for SWITCH_BUDGET, or the PARENT budget for ROLLUP_BUDGET / UNROLLUP_BUDGET)\",\n\
-             \"child_budget_name\": \"string (optional, the CHILD budget to roll up into the parent for ROLLUP_BUDGET / UNROLLUP_BUDGET)\",\n\
-             \"issue_title\": \"string (optional, a concise one-line summary of the problem/feedback for REPORT_ISSUE)\",\n\
-             \"issue_body\": \"string (optional, helpful detail for REPORT_ISSUE: what happened and what was expected)\",\n\
-             \"transaction_match\": \"string (optional, a short phrase identifying which existing transaction to edit, delete, or exclude, for EDIT_TRANSACTION / DELETE_TRANSACTION / EXCLUDE_TRANSACTION)\",\n\
-             \"new_description\": \"string (optional, the NEW description text for EDIT_TRANSACTION)\",\n\
-             \"excluded\": \"boolean (optional, for EXCLUDE_TRANSACTION: true/absent to leave the matched transaction OUT of budget totals, false to count it again)\",\n\
-             \"ignore_match\": \"string (optional, for CREATE_IGNORE_RULE: substring to match FUTURE imported transaction descriptions against so they are auto-excluded from budget totals)\",\n\
-             \"retirement_profile\": object (optional, ONLY for SET_RETIREMENT_PROFILE; include ONLY the fields the user actually stated. Fields: country = ISO 3166-1 alpha-2 such as 'US' -- put the retirement country HERE, NEVER in the top-level 'country' field, which belongs to LINK_BANK_ACCOUNT alone; birth_date = 'YYYY-MM-DD'; target_retirement_age = whole years, integer; current_gross_income = ANNUAL dollars; contribution_rate_pre_tax and contribution_rate_roth = PERCENT of gross, so six percent is 6.0 and NOT 0.06; expected_real_return and inflation_rate = PERCENT per year, so five percent is 5.0; life_expectancy_age = whole years, integer; target_replacement_ratio = a FRACTION of gross, so seventy-five percent is 0.75; ss_monthly_benefit = the MONTHLY dollars printed on the user\'s Social Security statement, which you must never estimate yourself; ss_benefit_at_age and ss_claiming_age = a whole age 62-70 or the string \'fra\'. Do NOT send employer_match_formula or ss_source -- neither is settable from chat)\n\
-           }},\n\
-           \"response_text\": \"The conversational message you want to show to the user. Always include useful feedback, and explain what actions you've taken.\"\n\
-         }}\n\n\
-         CRITICAL RULES:\n\
-         {}\n\
-         2. If they ask to create a budget (e.g. 'Create a monthly budget of $500 for Vacation' OR simply 'Create a Vacation budget'), set 'action' to 'CREATE_BUDGET'. Populate 'budget_name' and 'time_frame'. 'budget_limit' is OPTIONAL — only include it if the user names an amount; a budget with no amount is fine and its total is the sum of its category amounts. The new budget becomes the ACTIVE budget and starts EMPTY. In 'response_text', offer to add common starter categories (Income, Savings, Food, Transportation, Entertainment, Utilities) OR let them name their own — do NOT assume; wait for their answer.\n\
-         2b. SEED_CATEGORIES: only when the user agrees to add the common/standard/starter categories (e.g. 'yes, add the usual ones'), set 'action' to 'SEED_CATEGORIES' (no params needed). It adds the standard starter set to the ACTIVE budget. If they instead name specific categories, use 'CREATE_CATEGORY' with the 'categories' array (one object per category; do not also fill the top-level category_name).\n\
-         2c. DELETE_CATEGORY: if the user asks to remove/delete a category, set 'action' to 'DELETE_CATEGORY' and populate 'category_name' (must exist in the ACTIVE budget). DELETE_BUDGET: if they ask to remove/delete a whole budget, set 'action' to 'DELETE_BUDGET' and populate 'target_budget_name'. IMPORTANT: deletions are NOT performed immediately — the app shows the user a confirmation dialog and only deletes if they confirm. In 'response_text', briefly state exactly what will be deleted and that you'll ask them to confirm.\n\
-         2d. ROLLOVER: Budgets have a per-budget rollover toggle. When the user asks to enable/disable rolling over unused funds (e.g. 'roll over my unused budget each month', 'turn off rollover'), set 'action' to 'UPDATE_BUDGET' (or include it in CREATE_BUDGET) and set 'rollover' to true/false. When ENABLED, the unused remainder of the previous period (base amount minus what was spent) carries into the current period; an OVERSPEND does NOT carry — the carried amount clamps to 0. When DISABLED, each period simply uses the base amount. The ACTIVE BUDGET DETAILS show 'Base amount', 'Carried over from last period', and 'Effective amount this period' — use those exact figures when answering; never invent them.\n\
-         2e. PROJECT BUDGETS: Budgets have a type — 'time_based' (the default, resets each period) or 'project' (a one-off pool for a finite effort, e.g. a kitchen remodel, that does NOT reset or roll over). To create a project budget the user says e.g. 'create a project budget for the kitchen remodel' — set 'action' to 'CREATE_BUDGET' and set 'budget_type' to 'project' (otherwise omit it / leave it 'time_based'). To close a project budget the user says e.g. 'close this budget' / 'close the kitchen project' — set 'action' to 'CLOSE_BUDGET' and populate 'target_budget_name' with the named budget (or act on the ACTIVE budget if none is named). ONLY project budgets can be closed, and closing makes a budget READ-ONLY (no further transactions or edits). Closing is NOT destructive, so unlike DELETE_BUDGET it does NOT require a confirmation dialog — perform it directly.\n\
-         2f. CATEGORY ROLLOVER: Individual expense categories can roll over their own unused remainder independently — but a category only carries when the BUDGET's rollover is ALSO on (the budget toggle in 2d is the master switch). To roll over ALL categories the user says e.g. 'roll over all my categories' / 'carry everything forward' — set 'action' to 'SET_CATEGORY_ROLLOVER', set 'category_rollover' to true, and OMIT 'category_name' (an omitted name means ALL expense categories). To turn a SPECIFIC category's rollover on or off, name it via 'category_name' and set 'category_rollover' true/false. The CATEGORIES context now shows each expense category's 'Rollover: on/off' and 'Carried' amount — use those exact figures; never invent them.\n\
-         2g. ARCHIVING: When the user asks to archive a budget (hide it from the main list while keeping its data/history) set 'action' to 'ARCHIVE_BUDGET'; to bring it back set 'action' to 'UNARCHIVE_BUDGET'. Populate 'target_budget_name' when they name a budget; otherwise it applies to the ACTIVE budget. Archiving is reversible and does NOT delete data; it is distinct from closing a project (CLOSE_BUDGET makes a project read-only). The ACTIVE BUDGET DETAILS 'Status' line shows '(archived YYYY-MM-DD)' (the archive date) when a budget is archived.\n\
-         2h. AUTO-RENEW (RECURRING BUDGETS): Time-based budgets can auto-renew on their own time_frame cadence (monthly/quarterly/yearly). When the user asks to make a budget recurring / auto-renew (e.g. 'renew this budget automatically each month', 'make my budget recurring', 'turn off auto-renew'), set 'action' to 'UPDATE_BUDGET' (or include it in CREATE_BUDGET) and set 'auto_renew' to true/false. On each period boundary a background job advances the budget to the next period in place (it does NOT create a duplicate budget); categories and amounts stay the same, and if rollover is on the unused remainder carries into the new period automatically. ONLY time-based budgets can auto-renew — project budgets do NOT recur. The ACTIVE BUDGET DETAILS 'Auto-renew' line shows 'on (next renews YYYY-MM-DD)' or 'off' — use that exact date when answering 'when does this renew?'; never invent it.\n\
-         2i. ROLLUP (LINKED-CATEGORY AGGREGATION): A budget can roll one or more OTHER budgets up into it. Rolling a CHILD up into a PARENT adds to the parent a single LIVE linked category whose amount equals the child budget's own total — so the parent's reported total/spend now includes the child, and any later change to the child (its categories, limits, or spend) is reflected in the parent automatically on read. When the user asks to roll up / combine / aggregate one budget into another (e.g. 'roll my Groceries budget up into Household', 'combine the Kids budget into Family'), set 'action' to 'ROLLUP_BUDGET', put the PARENT in 'target_budget_name' (or use the ACTIVE budget if none is named) and the CHILD in 'child_budget_name'. To undo it, set 'action' to 'UNROLLUP_BUDGET' with the same parent/child — this removes that linked category and the child becomes standalone again. Rollup is NON-DESTRUCTIVE and reversible: NO data is moved or deleted, the child keeps its own identity (categories/transactions), and it is represented in the parent as ONE linked category, not merged in. It is SINGLE-LEVEL: a budget cannot be rolled up into itself, a budget already rolled up into another cannot also be a parent, and a parent cannot itself be rolled up. Archived children are excluded from the parent's combined totals. You can only roll up budgets you OWN. When the active budget is a parent, the ACTIVE BUDGET DETAILS 'Rolled-up budgets (shown as linked categories)' line lists the children and the combined budget/spend — use those exact figures.\n\
-         2j. RENAME: If the user asks to rename the ACTIVE budget or change its name (e.g. 'rename this budget to Summer Trip', 'change the budget name to Household 2026'), set 'action' to 'UPDATE_BUDGET' and put the new name in 'new_budget_name'. This renames the ACTIVE budget only and does not affect its categories, amounts, or transactions. Do NOT confuse this with SET_USER_NAME (the user's own name) or SWITCH_BUDGET (changing which budget is active).\n\
-         2k. RENAME CATEGORY: If the user asks to rename a category or change a category's name (e.g. 'rename the Food category to Groceries', 'change my Dining category name to Restaurants'), set 'action' to 'UPDATE_CATEGORY', put the CURRENT name in 'category_name' and the desired NEW name in 'new_category_name'. This renames a category on the ACTIVE budget only and preserves its type, limit, rollover setting, and transactions. Disambiguate: 'rename the Food category to Groceries' -> UPDATE_CATEGORY; 'rename this budget to Summer Trip' -> UPDATE_BUDGET. A category limit-set (e.g. 'set the limit for the Mortgage category to $2932.92') is NOT a rename — route it per rule 3 (it sets category_limit, not new_category_name).\n\
-         2l. AMOUNT MODE (FIXED vs DERIVED): A budget computes its amount one of two ways — 'derived' (the DEFAULT: the base amount is the SUM of its expense category amounts) or 'fixed' (the base amount is an amount you set on the budget itself). To set a fixed amount the user says e.g. 'set this budget to a fixed amount of $2000' / 'make this a fixed $2000 budget' — set 'action' to 'UPDATE_BUDGET', set 'amount_mode' to 'fixed', and set 'budget_limit' to 2000 (the fixed amount). To go back to category-derived they say e.g. 'derive this budget's amount from its categories' / 'base this budget on its categories' — set 'action' to 'UPDATE_BUDGET' and set 'amount_mode' to 'derived'. You can also set 'amount_mode' on CREATE_BUDGET. The 'Base amount' shown in ACTIVE BUDGET DETAILS reflects whichever mode is active (the fixed amount, or the category sum).\n\
-         2m. FUND CATEGORIES: A 'fund' (envelope / sinking-fund) category accumulates a running balance CUMULATIVELY across ALL periods since it was made a fund — not just the single previous period. Each period, its unused amount (limit minus spent) is ADDED to the balance; overspending SUBTRACTS from it, and the balance CAN GO NEGATIVE after sustained overspend. This is DIFFERENT from category rollover (rule 2f): rollover only looks at ONE previous period and NEVER goes negative (it clamps at zero), while a fund's balance keeps accumulating and can swing positive or negative indefinitely. If the user says e.g. 'make groceries a fund', 'turn on a running balance for X', 'let unused amount in this category build up over time', or 'let overspending here carry a deficit into next month', set 'action' to 'SET_CATEGORY_FUND', set 'is_fund' to true/false, and populate 'category_name' (or OMIT it to apply to ALL expense categories). You can also set 'is_fund' on CREATE_CATEGORY to create a category as a fund in one step. Funds only apply to EXPENSE categories. The CATEGORIES context shows each fund category's 'Fund: on', 'Balance', and 'Effective limit' — use those exact figures; never invent them.\n\
-         2n. BUDGETING STRATEGY: Every budget has a strategy -- 'zero_based' (tracks how much of the allocated total is still available to spend) or 'limit_spent_remaining' (tracks spending against a limit, shown as Budgeted/Spent/Remaining). When the user asks to CREATE a new budget and has NOT told you which strategy they want, do NOT set 'action' to 'CREATE_BUDGET' yet: set 'action' to 'NONE' and, in 'response_text', ask them to pick one and briefly describe both options. Once they answer (in this message or a later one), proceed with 'action':'CREATE_BUDGET' and 'budget_strategy' set to their choice. To change an existing budget's strategy, set 'action' to 'UPDATE_BUDGET' and set 'budget_strategy'.\n\
-         2o. LINKED BANK ACCOUNTS (Pro feature): if the user asks to 'link my bank account', 'connect my bank', 'sync transactions from my bank', or similar, set 'action' to 'LINK_BANK_ACCOUNT'. You MUST first know which COUNTRY their bank is in — currently supported: United States (Stripe), United Kingdom, France, Germany, Italy, Spain, Denmark, Finland, Norway (GoCardless), Mexico, Brazil (Belvo), Australia (Basiq), New Zealand (Akahu), Canada (Plaid). If they haven't said, ask which country before setting 'action' (use 'action':'NONE' and ask in 'response_text'); once you know it, populate 'country' with its 2-letter code (e.g. 'GB', 'US', 'MX', 'BR', 'AU', 'NZ', 'CA'). For a GoCardless country (UK, France, Germany, Italy, Spain, Denmark, Finland, Norway), you ALSO need the bank's name — populate 'institution_query' with it if named, otherwise ask which bank in 'response_text' (still with 'action':'NONE') before proceeding. For Mexico or Brazil (Belvo), Australia (Basiq), New Zealand (Akahu), or Canada (Plaid), do NOT ask for a bank name — the user picks their institution inside an embedded widget/modal (Belvo, Plaid) or the provider's own hosted consent page (Basiq/Akahu); just set 'action' to 'LINK_BANK_ACCOUNT' once you have the country. Do not ask for any account numbers or credentials yourself — GoCardless/Stripe/Belvo/Basiq/Akahu/Plaid handle authentication directly with the bank. If the user asks what's linked, what accounts are connected, or similar, set 'action' to 'LIST_LINKED_ACCOUNTS'. If the user asks to disconnect, unlink, or remove a linked account, set 'action' to 'UNLINK_BANK_ACCOUNT' and populate 'account_match' with the bank/account name they mentioned (or leave it empty if they didn't name one — you'll be asked to clarify). If the user asks to refresh, sync, or update their bank transactions now, set 'action' to 'REFRESH_BANK_ACCOUNT'. All four require an active Pro subscription except LIST_LINKED_ACCOUNTS and UNLINK_BANK_ACCOUNT, which work regardless of subscription status.\n\
-         3. If they want to set up category limit, make a 'CREATE_CATEGORY' action or update, set 'category_name', 'category_type', 'category_limit'. Categories always belong to the ACTIVE budget. To create MULTIPLE categories from ONE message (e.g. 'Add a labor category with a limit of 2600. Add a materials category with a limit of 2500.'), set 'action' to 'CREATE_CATEGORY' and populate the 'categories' array with one object per category ({{\"category_name\": \"string\", \"category_type\": \"income\"|\"savings\"|\"expense\" (optional), \"category_limit\": number (optional)}}); use the top-level category_name/category_type/category_limit only for a single category.\n\
-         4. If they want to share, set 'action' to 'SHARE_BUDGET', populate 'email' and 'permission_level' (default 'view').\n\
-         5. To answer questions about totals, spent percentages, recommendations, forecasts, set 'action' to 'NONE' and do math based on the data in 'ACTIVE BUDGET DETAILS' above. Do not guess stats.\n\
-         6. If the user wants to set a financial goal (e.g. 'Save $3000 for a vacation by 2026-12-01' or 'Pay off my $5000 credit card'), set 'action' to 'CREATE_GOAL'. Populate 'goal_name', 'goal_type' ('savings' or 'debt'), 'target_amount', and 'target_date' if given. Optionally set 'linked_category' to an existing category name.\n\
-         7. If the user reports money put toward a goal (e.g. 'I put $200 toward my vacation'), set 'action' to 'ADD_GOAL_CONTRIBUTION'. Populate 'goal_name' and 'amount', and 'note' if relevant. Use the GOALS context to match the goal name.\n\
-         8. When discussing goals, be encouraging: celebrate when a goal crosses 25/50/75/100% using the GOALS progress data above.\n\
-         9. If the user wants a recurring reminder (e.g. 'remind me every day to log expenses'), set 'action' to 'CREATE_REMINDER'. Populate 'reminder_message' with what to remind them, and 'cadence' ('daily', 'weekly', or 'monthly').\n\
-         11. If the user asks what budgets they have or to list their budgets, set 'action' to 'LIST_BUDGETS'. The USER'S BUDGETS context above lists budgets you OWN — annotated '(active)' if it's your own default budget, '(archived)' if archived — and budgets OTHERS have shared with you, annotated '(shared by OWNER_NAME, LEVEL access)' (LEVEL is 'view' or 'edit'), plus '(archived)' too if the owner has archived it. Never label a shared entry '(active)' — that annotation reflects only YOUR OWN default budget, never the owner's. If the user specifically asks what has been SHARED WITH THEM (e.g. 'show budgets shared with me', 'what's been shared with me'), enumerate in 'response_text' ONLY the entries annotated '(shared by ...)' — name each budget, who shared it, and its access level; if none are annotated '(shared by ...)', say plainly that nothing has been shared with them yet (do NOT give a flat refusal — you DO have this capability). Otherwise, when they ask generally to list their budgets, enumerate BOTH groups clearly separated, e.g. 'Yours: ...' then 'Shared with you: ...' (mark which of YOUR OWN is active and which are archived, exactly as before; omit the 'Shared with you' section entirely if there are no shared entries). If the user specifically asks to see their ARCHIVED budgets (e.g. 'show my archived budgets', 'what have I archived', 'list archived budgets'), still set 'action' to 'LIST_BUDGETS' but enumerate ONLY the budgets annotated '(archived)' in the USER'S BUDGETS context — this includes both your own and shared archived budgets (say none are archived if the list has no '(archived)' entries); these are hidden from the main list but their data is preserved — you can unarchive your own directly, but a shared archived budget can only be unarchived by its owner, not you, even with edit access.\n\
-         12. If the user asks to switch/change/use a different active budget (e.g. 'switch to my Vacation budget'), set 'action' to 'SWITCH_BUDGET' and populate 'target_budget_name' with the name they referenced, matched case-insensitively against USER'S BUDGETS. If you cannot find a matching budget, set 'action' to 'NONE' and tell them you couldn't find that budget. If they only have one budget, note that there's nothing to switch to.\n\
-         13. NAME: If you do not yet know the user's name, ask for it naturally. When the user tells you their name, set 'action' to 'SET_USER_NAME' and put the name in the 'name' field. Only do this when they have clearly stated their name.\n\
-         14. COACHING: Use the 'Budget maturity' line in ACTIVE BUDGET DETAILS. If the budget is marked '(rudimentary)', proactively coach the user on building a solid budget — encourage adding meaningful categories, setting a realistic spending limit, and logging transactions regularly — even if they didn't explicitly ask.\n\
-         15. EXPORT_DATA: If the user asks to export, download, or get a copy of their data (e.g. 'export my data', 'download all my data'), set 'action' to 'EXPORT_DATA'. This means the user wants to download/export their data. You CANNOT push a file from chat — in 'response_text' direct them to the account menu in Settings (sidebar account menu, choose 'Export my data') and mention the export is a JSON file covering budgets, categories, transactions, goals, chat history, and account info.\n\
-         16. DELETE_ACCOUNT: If the user asks to delete, close, or remove their account (e.g. 'delete my account', 'close my account'), set 'action' to 'DELETE_ACCOUNT'. This means the user wants to delete their account. NEVER delete anything from chat — account deletion is permanent and must be confirmed in Settings (sidebar account menu, choose 'Delete my account', then type their email and a current authenticator code). In 'response_text', explain it is permanent, route them to that flow, and make clear you cannot delete an account from chat. Do NOT confuse this with DELETE_BUDGET (removing a single budget).\n\
-         17. OPEN_INSIGHTS: If the user asks to see insights, analysis, spending trends, or a breakdown/analysis of their spending or budget (e.g. 'show me my insights', 'analyze my budget', 'what are my spending trends', 'open insights'), set 'action' to 'OPEN_INSIGHTS'. This opens the dedicated insights dialog in the app (KPIs, spend-over-time, top categories, per-budget spend vs budget). In 'response_text' give a brief natural transition, e.g. \"Sure — I'll open the insights panel for you.\" Do NOT try to enumerate the analysis yourself in text; the dialog presents it visually.\n\
-         17a. OPEN_BUDGETS_LIST: If the user asks to OPEN, VIEW, or BROWSE the full budgets page/screen (e.g. 'open my budgets page', 'show me the budgets screen', 'let me see all my budgets in a list', 'browse my budgets') — as opposed to a simple text listing (that's LIST_BUDGETS, action 11 above) — set 'action' to 'OPEN_BUDGETS_LIST'. This opens the dedicated budgets page in the app (owner/shared info, permission level, rollup relationships, switch-active). In 'response_text' give a brief natural transition, e.g. \"Sure — I'll open your budgets page.\" Do NOT try to enumerate the budgets yourself in text; the page presents them.\n\
-         18. LIST_CATEGORIES: If the user asks to see, show, or list their categories (e.g. 'show my categories', 'list categories', 'what are my categories'), set 'action' to 'LIST_CATEGORIES'. This renders the active budget's categories as a table (name, type, limit, spending, remaining, totals) in the chat. In 'response_text' give a brief natural transition, e.g. \"Here are your categories.\" Do NOT try to enumerate the categories yourself in text; the table presents them.\n\
-         19. REPORT_ISSUE: When the user reports a bug or problem with the app itself (e.g. 'a number looks wrong', 'the chart won't load', 'this keeps crashing'), or explicitly asks to send feedback or report something to the developers/team, you CAN file a report to the development team — set 'action' to 'REPORT_ISSUE', put a concise summary in 'issue_title' and the relevant detail (what happened, what they expected, any steps) in 'issue_body'. This is the ONLY way to actually reach the team. CRITICAL: NEVER tell the user you have notified, told, escalated, forwarded, or reported anything to the development team or developers UNLESS you set 'action' to 'REPORT_ISSUE' on THIS turn — if the action is 'NONE', you have NOT contacted anyone, so do not claim you did. Do NOT put secrets, passwords, full card/account numbers, sensitive personal financial figures, or anyone's name or email address (the user's or anyone they share a budget with) in 'issue_title'/'issue_body'; refer to people by role, e.g. 'the budget owner' or 'a shared viewer'. Briefly confirm once it is filed; do not promise a timeline or a personal follow-up.\n\
-         20. SEARCH_TRANSACTIONS: If the user asks to find or search their transactions by meaning rather than exact text (e.g. 'find my transactions about coffee', 'search my spending for anything related to car repairs', 'what did I spend on travel'), set 'action' to 'SEARCH_TRANSACTIONS'. This runs a semantic search over the active budget's transactions and appends the closest matches to your reply automatically — do NOT try to list transactions yourself in 'response_text'; just give a brief natural transition, e.g. \"Sure — here's what I found.\" Use this only for meaning-based lookups over EXISTING transactions, never to log a new one (that is ADD_TRANSACTION).\n\
-         20b. LIST_TRANSACTIONS: If the user asks to see, show, or list the transactions IN, FOR, or ON a SPECIFIC category (e.g. 'show me transactions in Food', 'what did I spend on Groceries', 'list transactions for the Utilities category'), set 'action' to 'LIST_TRANSACTIONS' and populate 'category_name' with the named category. This runs an EXACT, COMPLETE, category-filtered database query and appends the full list to your reply automatically — do NOT try to enumerate them yourself in 'response_text', and CRITICALLY do NOT answer from the RECENT TRANSACTIONS context above (that list is filtered by budget ONLY, not by category, and will silently include transactions from every category — using it for a category-scoped question is the exact bug this action exists to fix). Give a brief natural transition instead, e.g. \"Here are your Food transactions.\" If the named category doesn't exist in the active budget, LIST_TRANSACTIONS will tell the user so automatically — never guess or invent a category, and never fall back to listing everything.\n\
-         20c. CATEGORY_BALANCE: If the user asks about a SINGLE category's remaining balance (e.g. 'what remains in Entertainment', 'how much is left in Groceries', 'what's the balance for Utilities'), set 'action' to 'CATEGORY_BALANCE' and populate 'category_name' with the named category. This runs an EXACT, current-period-scoped lookup and appends the category's limit/spent/remaining as a table to your reply automatically — do NOT compute or state the spent/remaining figures yourself in 'response_text' (that is the exact bug this action exists to fix: never do this math off the CATEGORIES context above for a single named category). Give a brief natural transition instead, e.g. \"Here's your Entertainment balance.\" If you cannot tell which category they mean, set 'action' to 'NONE' and ask a clarifying question instead of guessing.\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         {}\n\
-         22. ALWAYS produce perfectly clean, valid, parseable JSON only.",
-        user_email,
-        name_context,
-        language_context,
-        budgets_context,
-        budget_context,
-        semantic_context,
-        history_context,
-        usage_context,
-        ADD_TRANSACTION_RULE,
-        CATEGORY_AFFORDABILITY_RULE,
-        RECENT_IMPORTED_MARKER_RULE,
-        EDIT_TRANSACTION_RULE,
-        DELETE_TRANSACTION_RULE,
-        EXCLUDE_TRANSACTION_RULE,
-        CREATE_IGNORE_RULE_RULE,
-        SET_RETIREMENT_PROFILE_RULE,
-        RETIREMENT_PROJECTION_RULE
-    );
+    let system_instructions = build_system_instructions(&PromptContext {
+        user_email: &user_email,
+        name_context: &name_context,
+        language_context: &language_context,
+        budgets_context: &budgets_context,
+        budget_context: &budget_context,
+        semantic_context: &semantic_context,
+        history_context: &history_context,
+        usage_context: &usage_context,
+    });
 
     // 7. Call Gemini or Run Mock Fallback
     // #300: `mut` so the CREATE_BUDGET arm can override `response_text` directly for the
@@ -1782,122 +1653,51 @@ pub async fn chat_endpoint(
     // which would otherwise pair it with the canned/LLM-generated "I'll create it!" text
     // AND a ⚠️ warning marker -- a confusing, self-contradicting reply for something that
     // isn't a failure at all.
-    let mut parsed_ai_res: AiStructuredResponse = if !api_key.is_empty() {
-        // CALL GEMINI VIA REQWEST
-        // Bound the main chat generateContent call: this occupies the request/connection for
-        // the synchronous /chat handler, so a stalled Gemini connection must not hang the
-        // request indefinitely. 30s is sized to fail well before an unbounded hang, not to
-        // guarantee beating the frontend's 45s-default fetchApi timeout (#248) — the /chat
-        // handler awaits other sequential Gemini calls too (an embedding lookup, and on the
-        // first exchange, title generation), so total handler latency can still exceed 45s.
-        // The 30s bound just ensures a stalled connection here surfaces as this function's
-        // existing "communications link is down" fallback response rather than hanging forever.
-        // See #249.
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!(
-            "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-            gemini_api_base(), api_key
-        );
-
-        let req_payload = GeminiChatRequest {
-            contents: vec![
-                GeminiChatContent {
-                    parts: vec![
-                        GeminiChatPart { text: system_instructions },
-                        GeminiChatPart { text: format!("USER MESSAGE: {}", payload.message) }
-                    ]
-                }
-            ],
-            generation_config: GeminiGenerationConfig {
-                response_mime_type: "application/json".to_string(),
+    let mut parsed_ai_res: AiStructuredResponse = match &ai_res {
+        Err(e) => {
+            // Only a broken BYO row points the user at Settings. A failed
+            // lookup (ConfigUnavailable) may hit a Nels-hosted user.
+            if *e == crate::llm::LlmError::KeyUnavailable {
+                ai_provider_error = Some(e.code().to_string());
             }
-        };
-
-        let res = client.post(&url)
-            .json(&req_payload)
-            .send()
-            .await;
-
-        match res {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let chat_res = response.json::<GeminiChatResponse>().await;
-                    match chat_res {
-                        Ok(gem_res) => {
-                            let usage = gem_res.usage_metadata.as_ref();
-                            record_llm_usage(
-                                &state.db,
-                                user_id,
-                                "models/gemini-2.5-flash",
-                                "chat",
-                                usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.total_token_count).unwrap_or(0),
-                            )
-                            .await;
-                            if let Some(candidate) = gem_res.candidates.first() {
-                                if let Some(part) = candidate.content.parts.first() {
-                                    let clean_text = part.text.trim();
-                                    // Parse structured JSON
-                                    match serde_json::from_str::<AiStructuredResponse>(clean_text) {
-                                        Ok(parsed) => parsed,
-                                        Err(e) => {
-                                            tracing::error!("Failed to parse Gemini JSON output: {}. Raw: {}", e, clean_text);
-                                            malformed_response_fallback(clean_text)
-                                        }
-                                    }
-                                } else {
-                                    AiStructuredResponse {
-                                        thought: "Empty response parts".to_string(),
-                                        action: "NONE".to_string(),
-                                        action_params: None,
-                                        response_text: "I received an empty reply from my engine.".to_string(),
-                                    }
-                                }
-                            } else {
-                                AiStructuredResponse {
-                                    thought: "No candidates returned".to_string(),
-                                    action: "NONE".to_string(),
-                                    action_params: None,
-                                    response_text: "I'm sorry, I was unable to compile a thought candidate.".to_string(),
-                                }
-                            }
-                        }
+            llm_error_reply(*e, None)
+        }
+        Ok(crate::llm::Resolved::Llm(creds)) => {
+            // Bound the main chat call: this occupies the request/connection for the
+            // synchronous /chat handler, so a stalled provider connection must not hang the
+            // request indefinitely. 30s is sized to fail well before an unbounded hang, not
+            // to guarantee beating the frontend's 45s-default fetchApi timeout (#248). The
+            // bound is now enforced inside llm.rs. See #249.
+            match crate::llm::generate_json_for(
+                &state.db,
+                user_id,
+                creds,
+                "chat",
+                &system_instructions,
+                &format!("USER MESSAGE: {}", payload.message),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            {
+                Ok(text) => {
+                    let clean_text = text.trim();
+                    match serde_json::from_str::<AiStructuredResponse>(clean_text) {
+                        Ok(parsed) => parsed,
                         Err(e) => {
-                            tracing::error!("Gemini json parse error: {}", e);
-                            AiStructuredResponse {
-                                thought: "Gemini JSON structure changed".to_string(),
-                                action: "NONE".to_string(),
-                                action_params: None,
-                                response_text: "My neural network returned a response that couldn't be indexed correctly.".to_string(),
-                            }
+                            tracing::error!("Failed to parse model JSON output: {}. Raw: {}", e, clean_text);
+                            malformed_response_fallback(clean_text)
                         }
                     }
-                } else {
-                    tracing::error!("Gemini API error. Status: {:?}", response.status());
-                    AiStructuredResponse {
-                        thought: "Gemini API failed".to_string(),
-                        action: "NONE".to_string(),
-                        action_params: None,
-                        response_text: format!("I hit a problem reaching my reasoning engine (status {:?}). Please try again in a moment.", response.status()),
-                    }
                 }
-            }
-            Err(e) => {
-                tracing::error!("Error posting to Gemini API: {}", e);
-                AiStructuredResponse {
-                    thought: "HTTP failure".to_string(),
-                    action: "NONE".to_string(),
-                    action_params: None,
-                    response_text: "My communications link is down. Please verify internet connectivity.".to_string(),
+                Err(e) => {
+                    if creds.source == crate::llm::KeySource::Byo {
+                        ai_provider_error = Some(e.code().to_string());
+                    }
+                    llm_error_reply(e, Some(creds))
                 }
             }
         }
-    } else {
+        Ok(crate::llm::Resolved::Offline) => {
         // GEMINI API KEY IS NOT SET - RUN INTUITIVE OFFLINE MOCK NLP PARSER FOR DEMO
         let msg_lower = payload.message.to_lowercase();
         let mut action = "NONE".to_string();
@@ -2232,7 +2032,8 @@ pub async fn chat_endpoint(
             && (msg_lower.contains("edit") || msg_lower.contains("change")
                 || msg_lower.contains("correct") || msg_lower.contains("update")) {
             // Offline EDIT routing (#199). The actual edit resolves the target by
-            // semantic embedding search, which requires GEMINI_API_KEY; in offline
+            // semantic embedding search, which needs an embedding-capable resolved
+            // provider (llm::embed_for); in offline
             // mode there are no embeddings, so this dispatches and then degrades
             // gracefully ("couldn't look up that transaction"). Routing here keeps
             // the action reachable and unit-testable.
@@ -2344,6 +2145,7 @@ pub async fn chat_endpoint(
             action,
             action_params: Some(action_params),
             response_text,
+        }
         }
     };
 
@@ -3450,7 +3252,7 @@ pub async fn chat_endpoint(
                                 // embedding, #195). Tolerant: no key / failure -> NULL
                                 // embedding, transaction still created.
                                 let tx_row = crate::budget::insert_transaction_with_embedding(
-                                    &state.db, bid, category_id, amt, &desc, user_id,
+                                    &state.db, bid, category_id, amt, &desc, user_id, &ai,
                                 )
                                 .await;
 
@@ -4455,9 +4257,10 @@ pub async fn chat_endpoint(
                     );
                 }
                 (Some(_), None) => {
-                    // No query embedding (e.g. no GEMINI_API_KEY, or the embed
-                    // call failed). Stay quiet: a missing key is intentional and
-                    // an embed failure is already logged in get_gemini_embedding.
+                    // No query embedding (the resolved provider cannot embed, or
+                    // the embed call failed). Stay quiet: a non-embedding provider
+                    // is intentional and an embed failure is already logged by
+                    // the llm.rs adapter.
                     search_results_md = Some(
                         "I couldn't search your transactions right now.".to_string(),
                     );
@@ -4577,17 +4380,17 @@ pub async fn chat_endpoint(
             }
         }
         "EDIT_TRANSACTION" => {
-            let (ml, me) = chat_edit_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (ml, me) = chat_edit_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             mutation_log = ml;
             mutation_error = me;
         }
         "DELETE_TRANSACTION" => {
-            let (pd, me) = chat_delete_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (pd, me) = chat_delete_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             pending_deletion = pd;
             mutation_error = me;
         }
         "EXCLUDE_TRANSACTION" => {
-            let (ml, me) = chat_exclude_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (ml, me) = chat_exclude_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             mutation_log = ml;
             mutation_error = me;
         }
@@ -4664,11 +4467,7 @@ pub async fn chat_endpoint(
     .await;
 
     let ai_msg_id = Uuid::new_v4();
-    let ai_vector_opt = if !api_key.is_empty() {
-        get_gemini_embedding(&final_response_text, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let ai_vector_opt = crate::llm::embed_for(&state.db, user_id, &ai, &final_response_text).await;
     let ai_v_str = ai_vector_opt.map(|v| vector_to_string(&v));
 
     let _ = sqlx::query(
@@ -4706,12 +4505,11 @@ pub async fn chat_endpoint(
         None => false,
     };
     if needs_title {
-        let title = if !api_key.is_empty() {
-            generate_conversation_title(&payload.message, &final_response_text, &api_key, &state.db, user_id)
+        let title = match ai.creds() {
+            Some(c) => generate_conversation_title(&payload.message, &final_response_text, c, &state.db, user_id)
                 .await
-                .unwrap_or_else(|| fallback_title(&payload.message))
-        } else {
-            fallback_title(&payload.message)
+                .unwrap_or_else(|| fallback_title(&payload.message)),
+            None => fallback_title(&payload.message),
         };
         let _ = sqlx::query("UPDATE conversations SET title = $1 WHERE id = $2")
             .bind(&title)
@@ -4740,6 +4538,7 @@ pub async fn chat_endpoint(
         open_transactions_list,
         open_retirement,
         retirement_projection,
+        ai_provider_error,
     }))
 }
 
@@ -5979,24 +5778,20 @@ struct ResolvedTransaction {
 /// DELETE_TRANSACTION (#258) so the matching algorithm and ambiguity guard
 /// (EDIT_TRANSACTION_MAX_DISTANCE) can never drift between the two actions.
 /// Returns `Err(user_facing_message)` on an empty locator, a missing/failed
-/// embedding (e.g. no GEMINI_API_KEY), no match, or a match beyond the
+/// embedding (e.g. offline, or a provider that can't embed), no match, or a match beyond the
 /// distance cutoff.
 async fn resolve_transaction_by_locator(
     state: &AppState,
     user_id: Uuid,
     bid: Uuid,
     locator: &str,
+    ai: &crate::llm::Resolved,
 ) -> Result<ResolvedTransaction, String> {
     if locator.trim().is_empty() {
         return Err("Tell me which transaction you mean.".to_string());
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let loc_embedding = if !api_key.is_empty() {
-        get_gemini_embedding(locator, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let loc_embedding = crate::llm::embed_for(&state.db, user_id, ai, locator).await;
     let v = match loc_embedding {
         Some(v) => v,
         None => return Err("I couldn't look up that transaction right now.".to_string()),
@@ -6064,6 +5859,7 @@ async fn chat_edit_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<String>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6086,8 +5882,7 @@ async fn chat_edit_transaction(
         return (None, Some("What would you like to change about that transaction?".to_string()));
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(r) => r,
         Err(msg) => return (None, Some(msg)),
     };
@@ -6137,8 +5932,8 @@ async fn chat_edit_transaction(
         );
     }
 
-    let tx_embedding = if description_changed && !api_key.is_empty() {
-        get_gemini_embedding(&new_desc, &api_key, &state.db, user_id).await
+    let tx_embedding = if description_changed {
+        crate::llm::embed_for(&state.db, user_id, ai, &new_desc).await
     } else {
         None
     };
@@ -6193,6 +5988,7 @@ async fn chat_exclude_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<String>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6210,7 +6006,7 @@ async fn chat_exclude_transaction(
         return (None, Some("Tell me which transaction — e.g. \"ignore that Visa payment\".".to_string()));
     }
     let excluded = params.excluded.unwrap_or(true);
-    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(r) => r,
         Err(msg) => return (None, Some(msg)),
     };
@@ -6289,6 +6085,7 @@ async fn chat_delete_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<PendingDeletion>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6301,7 +6098,7 @@ async fn chat_delete_transaction(
         return (None, Some("Tell me which transaction to delete — e.g. \"delete my $5 coffee transaction\".".to_string()));
     }
 
-    match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(resolved) => (
             Some(PendingDeletion {
                 kind: "transaction".to_string(),
@@ -7609,7 +7406,7 @@ pub(crate) fn offline_budgets_list_action(msg_lower: &str) -> Option<&'static st
 
 /// Offline (no-LLM) router for the bank-linking chat actions (#303): LINK_BANK_ACCOUNT,
 /// LIST_LINKED_ACCOUNTS, UNLINK_BANK_ACCOUNT, REFRESH_BANK_ACCOUNT. Pure keyword matching so
-/// it can run without GEMINI_API_KEY, mirroring the other `offline_*_action` helpers.
+/// it can run without a resolved LLM provider, mirroring the other `offline_*_action` helpers.
 pub(crate) fn offline_linked_accounts_action(msg_lower: &str) -> Option<&'static str> {
     // Order matters: "disconnect"/"unlink" checked before the generic "link"
     // phrase so "unlink my bank account" doesn't match LINK_BANK_ACCOUNT first.
@@ -7636,7 +7433,7 @@ pub(crate) fn offline_linked_accounts_action(msg_lower: &str) -> Option<&'static
 /// SAME message. No conversational memory (mirrors offline_budget_strategy's
 /// same-message-only convention), so "link my UK bank account" works but a
 /// bare follow-up "it's in the UK" after a prior clarifying question does not
-/// — that gap only affects the offline (no GEMINI_API_KEY) path.
+/// — that gap only affects the offline (no resolved provider) path.
 pub(crate) fn offline_country_hint(msg_lower: &str) -> Option<&'static str> {
     // "uk"/"us" are checked as EXACT whole-word tokens (not `.contains(" uk")`/
     // `.contains("us bank")`), which previously false-positived on any longer
@@ -7798,90 +7595,33 @@ fn fallback_title(first_user_msg: &str) -> String {
     }
 }
 
-// Helper: ask Gemini for a short (3-6 word) conversation title summarizing the
-// first exchange. Mirrors the chat-call pattern; returns the trimmed first line.
+// Helper: ask the user's model for a short (3-6 word) conversation title
+// summarizing the first exchange; returns the trimmed first line. Routed through
+// llm.rs (nels-oss#3), which also records usage and logs every failure (#297).
 async fn generate_conversation_title(
     first_user_msg: &str,
     first_ai_msg: &str,
-    api_key: &str,
+    creds: &crate::llm::LlmCredentials,
     pool: &sqlx::PgPool,
     user_id: uuid::Uuid,
 ) -> Option<String> {
-    // Bound the title-generation call: it's awaited inline in the /chat handler (after the
-    // reply is prepared, but still before the HTTP response returns), so a stalled connection
-    // must not hang the request. 20s matches get_gemini_embedding's existing precedent — this
-    // call returns one short line and already degrades gracefully to fallback_title() on any
-    // failure. See #249.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        gemini_api_base(), api_key
-    );
-
     let prompt = format!(
         "Generate a concise 3-6 word title (no quotes, no trailing punctuation) \
          summarizing this conversation. Reply with ONLY the title.\n\n\
          USER: {}\nASSISTANT: {}",
         first_user_msg, first_ai_msg
     );
-
-    let req_payload = GeminiChatRequest {
-        contents: vec![GeminiChatContent {
-            parts: vec![GeminiChatPart { text: prompt }],
-        }],
-        generation_config: GeminiGenerationConfig {
-            response_mime_type: "text/plain".to_string(),
-        },
-    };
-
-    let res = client
-        .post(&url)
-        .json(&req_payload)
-        .send()
+    // Bound the title-generation call: it's awaited inline in the /chat handler (after the
+    // reply is prepared, but still before the HTTP response returns), so a stalled connection
+    // must not hang the request. It returns one short line and already degrades gracefully to
+    // fallback_title() on any failure. See #249.
+    let raw = crate::llm::generate_text_for(pool, user_id, creds, "title", &prompt, std::time::Duration::from_secs(20))
         .await
-        .inspect_err(|e| tracing::error!("Error posting to Gemini API (title generation): {}", e))
         .ok()?;
-    if !res.status().is_success() {
-        tracing::error!("Title generation failed with status: {:?}", res.status());
-        return None;
-    }
-    let parsed = match res.json::<GeminiChatResponse>().await {
-        Ok(p) => p,
-        Err(e) => {
-            // #297: log rather than silently discard a malformed/unexpected 2xx body,
-            // mirroring reports.rs::gemini_narrative's #294 fix and this function's own
-            // non-2xx/request-error arms above (both already log).
-            tracing::error!("Title generation response parse failed: {}", e);
-            return None;
-        }
-    };
-    let usage = parsed.usage_metadata.as_ref();
-    record_llm_usage(
-        pool,
-        user_id,
-        "models/gemini-2.5-flash",
-        "title",
-        usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-        usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-        usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-        usage.and_then(|u| u.total_token_count).unwrap_or(0),
-    )
-    .await;
-    let raw = parsed.candidates.first()?.content.parts.first()?.text.clone();
-    let title = raw
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches(['"', '\'', '.'])
-        .to_string();
+    let title = raw.lines().next().unwrap_or("").trim().trim_matches(['"', '\'', '.']).to_string();
     if title.is_empty() {
         None
     } else {
-        // Guard against a runaway model response.
         Some(title.chars().take(80).collect())
     }
 }
@@ -8058,7 +7798,9 @@ pub async fn suggested_question(
     Extension(user_id): Extension<Uuid>,
     Query(params): Query<SuggestedQuestionQuery>,
 ) -> Result<Json<SuggestedQuestionResponse>, (StatusCode, String)> {
-    let api_key = env::var("GEMINI_API_KEY").unwrap_or_default();
+    let ai = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+        .await
+        .unwrap_or(crate::llm::Resolved::Offline);
 
     // Recent cross-thread context, ownership-scoped by user_id.
     let rows = sqlx::query(
@@ -8070,11 +7812,16 @@ pub async fn suggested_question(
     .await
     .map_err(internal_error)?;
 
-    if rows.is_empty() || api_key.is_empty() {
-        return Ok(Json(SuggestedQuestionResponse {
-            question: DEFAULT_SUGGESTED_QUESTION.to_string(),
-        }));
-    }
+    // Offline, or a key that couldn't be resolved: the canned default, never the
+    // Nels key as a fallback for a BYO user (spec A8).
+    let creds = match ai.creds() {
+        Some(c) if !rows.is_empty() => c,
+        _ => {
+            return Ok(Json(SuggestedQuestionResponse {
+                question: DEFAULT_SUGGESTED_QUESTION.to_string(),
+            }));
+        }
+    };
 
     let mut context = String::new();
     for r in rows.iter().rev() {
@@ -8083,34 +7830,23 @@ pub async fn suggested_question(
         context.push('\n');
     }
 
-    let question = generate_suggested_question(&context, &api_key, language_name(params.locale.as_deref()), &state.db, user_id)
+    let question = generate_suggested_question(&context, creds, language_name(params.locale.as_deref()), &state.db, user_id)
         .await
         .unwrap_or_else(|| DEFAULT_SUGGESTED_QUESTION.to_string());
 
     Ok(Json(SuggestedQuestionResponse { question }))
 }
 
-// Helper: ask Gemini for one short, relevant follow-up question the user might
-// ask Nels next, given their recent conversation context.
+// Helper: ask the user's model for one short, relevant follow-up question the
+// user might ask Nels next, given their recent conversation context. Routed
+// through llm.rs (nels-oss#3), which records usage and logs every failure (#297).
 async fn generate_suggested_question(
     context: &str,
-    api_key: &str,
+    creds: &crate::llm::LlmCredentials,
     lang: Option<&'static str>,
     pool: &sqlx::PgPool,
     user_id: uuid::Uuid,
 ) -> Option<String> {
-    // Bound the suggested-question call: same reasoning as generate_conversation_title — a
-    // short, single-line, already-optional output (falls back to DEFAULT_SUGGESTED_QUESTION on
-    // any failure), 20s matches get_gemini_embedding's existing precedent. See #249.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        gemini_api_base(), api_key
-    );
-
     let prompt = format!(
         "You are Nels, a personal budgeting assistant. Based on the user's recent \
          conversation history below, suggest ONE short, natural follow-up question \
@@ -8125,51 +7861,19 @@ async fn generate_suggested_question(
         None => prompt,
     };
 
-    let req_payload = GeminiChatRequest {
-        contents: vec![GeminiChatContent {
-            parts: vec![GeminiChatPart { text: prompt }],
-        }],
-        generation_config: GeminiGenerationConfig {
-            response_mime_type: "text/plain".to_string(),
-        },
-    };
-
-    let res = client
-        .post(&url)
-        .json(&req_payload)
-        .send()
-        .await
-        .inspect_err(|e| {
-            tracing::error!("Error posting to Gemini API (suggested-question generation): {}", e)
-        })
-        .ok()?;
-    if !res.status().is_success() {
-        tracing::error!("Suggested-question generation failed: {:?}", res.status());
-        return None;
-    }
-    let parsed = match res.json::<GeminiChatResponse>().await {
-        Ok(p) => p,
-        Err(e) => {
-            // #297: log rather than silently discard a malformed/unexpected 2xx body,
-            // mirroring reports.rs::gemini_narrative's #294 fix and this function's own
-            // non-2xx/request-error arms above (both already log).
-            tracing::error!("Suggested-question response parse failed: {}", e);
-            return None;
-        }
-    };
-    let usage = parsed.usage_metadata.as_ref();
-    record_llm_usage(
+    // Bound the suggested-question call: same reasoning as generate_conversation_title — a
+    // short, single-line, already-optional output (falls back to DEFAULT_SUGGESTED_QUESTION on
+    // any failure). See #249.
+    let raw = crate::llm::generate_text_for(
         pool,
         user_id,
-        "models/gemini-2.5-flash",
+        creds,
         "suggested_questions",
-        usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-        usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-        usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-        usage.and_then(|u| u.total_token_count).unwrap_or(0),
+        &prompt,
+        std::time::Duration::from_secs(20),
     )
-    .await;
-    let raw = parsed.candidates.first()?.content.parts.first()?.text.clone();
+    .await
+    .ok()?;
     let q = raw
         .lines()
         .next()
@@ -8202,7 +7906,7 @@ async fn generate_suggested_question(
 //
 // #283 widened this to `pub(crate)` and moved it to module scope (from inside `mod tests`
 // below) so `reports.rs`'s own test module can reuse the exact same lock for its
-// `gemini_narrative` timeout test — a second, parallel lock would silently reintroduce the
+// narrative timeout test — a second, parallel lock would silently reintroduce the
 // cross-test env-var race this lock exists to prevent.
 #[cfg(test)]
 pub(crate) static GEMINI_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -8245,6 +7949,28 @@ mod parse_resilience_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_prompt_golden() {
+        let got = build_system_instructions(&PromptContext {
+            user_email: "golden@example.test",
+            name_context: "NAME_CTX",
+            language_context: "LANG_CTX",
+            budgets_context: "BUDGETS_CTX",
+            budget_context: "BUDGET_CTX",
+            semantic_context: "SEMANTIC_CTX",
+            history_context: "HISTORY_CTX",
+            usage_context: "USAGE_CTX",
+        });
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/system_prompt_golden.txt");
+        if std::env::var("UPDATE_GOLDEN").as_deref() == Ok("1") {
+            std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata")).unwrap();
+            std::fs::write(path, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(path).expect("run once with UPDATE_GOLDEN=1");
+        assert_eq!(got, want, "system prompt changed; if intended, rerun with UPDATE_GOLDEN=1");
+        assert!(got.contains("JSON"), "OpenAI json_object mode requires the word JSON");
+    }
 
     /// Seed an already-entitled ('active') subscription for `user`, so that
     /// `ensure_ready_to_own_budget`'s first-budget trial gate (wired into the
@@ -8307,12 +8033,33 @@ mod tests {
         );
     }
 
+    // nels-oss#3: the Nels-hosted copy is byte-for-byte what users saw before; BYO copy
+    // names the provider and points at Settings.
+    #[test]
+    fn llm_error_reply_names_byo_provider_and_keeps_nels_copy() {
+        let byo = crate::llm::LlmCredentials::new(crate::llm::Provider::OpenAi, "k".into(), crate::llm::KeySource::Byo);
+        let nels = crate::llm::LlmCredentials::new(crate::llm::Provider::Gemini, "k".into(), crate::llm::KeySource::Nels);
+        let r = llm_error_reply(crate::llm::LlmError::Auth, Some(&byo));
+        assert!(r.response_text.contains("OpenAI") && r.response_text.contains("Settings"));
+        let r = llm_error_reply(crate::llm::LlmError::Transport, Some(&nels));
+        assert_eq!(r.response_text, "My communications link is down. Please verify internet connectivity.");
+        let r = llm_error_reply(crate::llm::LlmError::Upstream(503), Some(&nels));
+        assert_eq!(r.response_text, "I hit a problem reaching my reasoning engine (status 503). Please try again in a moment.");
+        let r = llm_error_reply(crate::llm::LlmError::KeyUnavailable, None);
+        assert_eq!(r.response_text, "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.");
+        assert_eq!(r.action, "NONE");
+        let r = llm_error_reply(crate::llm::LlmError::ConfigUnavailable, None);
+        assert_eq!(r.response_text, "I couldn't load your AI settings just now. Please try again in a moment.");
+        assert!(!r.response_text.contains("Settings"), "a lookup failure must not send a Nels-hosted user to AI settings");
+        assert_eq!(r.action, "NONE");
+    }
+
     // #269: proves generate_conversation_title's #249 timeout (20s) actually fires end-to-end —
     // not just that a Duration was passed to Client::builder(). A local mock Gemini endpoint
     // (via GEMINI_API_BASE) sleeps past the configured timeout before responding; the call must
     // return None (its caller's existing fallback is fallback_title) well before the mock ever
-    // answers. A lazy pool is safe here: record_llm_usage is only reached on the success path,
-    // which this test never takes.
+    // answers. A lazy pool is safe here: llm.rs records usage only on the success path, which
+    // this test never takes, and `observe` writes nothing for a Nels-sourced key.
     #[tokio::test]
     async fn generate_conversation_title_falls_back_to_fallback_title_on_timeout() {
         let _env = GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -8337,12 +8084,17 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let started = std::time::Instant::now();
         let result = generate_conversation_title(
             "how much did I spend on food",
             "You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             &pool,
             uuid::Uuid::new_v4(),
         )
@@ -8388,11 +8140,16 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let started = std::time::Instant::now();
         let result = generate_suggested_question(
             "user: how much did I spend on food\nassistant: You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             None,
             &pool,
             uuid::Uuid::new_v4(),
@@ -8452,7 +8209,7 @@ mod tests {
     // LOGGED via tracing::error! before generate_conversation_title returns None, not
     // silently swallowed via `.ok()?`. The `None` return alone can't distinguish the old
     // (silent) code from the fixed code since both return None on a parse failure — only
-    // the captured error log proves the fix, mirroring reports.rs::gemini_narrative's own
+    // the captured error log proves the fix, mirroring reports.rs's former narrative
     // #294 fix and notifications.rs's #201 log-capture pattern.
     #[tokio::test(flavor = "current_thread")]
     async fn generate_conversation_title_logs_malformed_2xx_body() {
@@ -8465,8 +8222,8 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let mock_handle = tokio::spawn(async move {
-            // 2xx with a body missing the required `candidates` field — a well-formed
-            // JSON object that still fails to deserialize into GeminiChatResponse.
+            // 2xx with a body carrying no candidate text — a well-formed JSON object that
+            // llm.rs's Gemini adapter maps to BadResponse (and, #297, logs).
             let mock = axum::Router::new().fallback(|| async { axum::Json(serde_json::json!({})) });
             if let Err(e) = axum::serve(listener, mock).await {
                 eprintln!("mock Gemini server error: {e}");
@@ -8478,11 +8235,16 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let result = generate_conversation_title(
             "how much did I spend on food",
             "You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             &pool,
             uuid::Uuid::new_v4(),
         )
@@ -8490,7 +8252,7 @@ mod tests {
 
         assert!(result.is_none(), "a malformed 2xx body must yield None, triggering fallback_title");
         assert!(
-            captured.has_error_containing("Title generation response parse failed"),
+            captured.has_error_containing("llm response parse failed"),
             "a malformed 2xx Gemini body must be logged via tracing::error!, not silently swallowed"
         );
         mock_handle.abort();
@@ -8520,10 +8282,15 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let result = generate_suggested_question(
             "user: how much did I spend on food\nassistant: You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             None,
             &pool,
             uuid::Uuid::new_v4(),
@@ -8532,7 +8299,7 @@ mod tests {
 
         assert!(result.is_none(), "a malformed 2xx body must yield None, triggering DEFAULT_SUGGESTED_QUESTION");
         assert!(
-            captured.has_error_containing("Suggested-question response parse failed"),
+            captured.has_error_containing("llm response parse failed"),
             "a malformed 2xx Gemini body must be logged via tracing::error!, not silently swallowed"
         );
         mock_handle.abort();
@@ -8714,44 +8481,6 @@ mod tests {
                 "imported_source_suffix must still emit the 'imported from' token rule 20e keys off (renderer/rule drift guard)"
             );
         }
-    }
-
-    // UsageMetadata deserialization + the None->0 coercion used when recording
-    // token usage. Pure unit test: no DB, no network.
-    #[test]
-    fn usage_metadata_deserializes_and_coerces_missing_to_zero() {
-        // A response with NO usageMetadata field -> usage_metadata is None, and
-        // the recorded token values coerce to 0.
-        let json = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}"#;
-        let resp: GeminiChatResponse = serde_json::from_str(json).expect("must parse");
-        assert!(resp.usage_metadata.is_none(), "absent usageMetadata -> None");
-        let usage = resp.usage_metadata.as_ref();
-        assert_eq!(usage.and_then(|u| u.prompt_token_count).unwrap_or(0), 0);
-        assert_eq!(usage.and_then(|u| u.candidates_token_count).unwrap_or(0), 0);
-        assert_eq!(usage.and_then(|u| u.total_token_count).unwrap_or(0), 0);
-
-        // Partial UsageMetadata: only totalTokenCount present. Missing fields
-        // deserialize to None and coerce to 0; total parses to Some(42).
-        let partial: UsageMetadata =
-            serde_json::from_str(r#"{"totalTokenCount": 42}"#).expect("must parse");
-        assert_eq!(partial.prompt_token_count, None);
-        assert_eq!(partial.candidates_token_count, None);
-        assert_eq!(partial.thoughts_token_count, None);
-        assert_eq!(partial.total_token_count, Some(42));
-        assert_eq!(partial.prompt_token_count.unwrap_or(0), 0);
-        assert_eq!(partial.candidates_token_count.unwrap_or(0), 0);
-        assert_eq!(partial.thoughts_token_count.unwrap_or(0), 0);
-
-        // Full UsageMetadata: all camelCase fields parse via the rename,
-        // including thoughtsTokenCount from Gemini 2.5 thinking models.
-        let full: UsageMetadata = serde_json::from_str(
-            r#"{"promptTokenCount":10,"candidatesTokenCount":20,"thoughtsTokenCount":5,"totalTokenCount":35}"#,
-        )
-        .expect("must parse");
-        assert_eq!(full.prompt_token_count, Some(10));
-        assert_eq!(full.candidates_token_count, Some(20));
-        assert_eq!(full.thoughts_token_count, Some(5));
-        assert_eq!(full.total_token_count, Some(35));
     }
 
     // vector_to_string formats a f32 slice as pgvector's bracketed, comma-
@@ -10793,9 +10522,9 @@ mod tests {
     // hanging endpoint, rather than the request hanging forever. This is a first exchange (no
     // conversation_id) with a non-empty GEMINI_API_KEY, so chat_endpoint takes the live-call
     // branch through FOUR sequential Gemini calls against the same mock, each bounded by its own
-    // #249 timeout: get_gemini_embedding for the user's message (20s, semantic-search context,
+    // #249 timeout: llm::embed_for for the user's message (20s, semantic-search context,
     // ~line 1317), the main chat generateContent call (30s, ~line 1508), a second
-    // get_gemini_embedding for the AI's own reply text (20s, ~line 3576), and — since this is a
+    // llm::embed_for for the AI's own reply text (20s, ~line 3576), and — since this is a
     // first exchange with no existing title — generate_conversation_title (20s, ~line 3618),
     // fired inline before the HTTP response returns. All four are exercised and all four must
     // individually time out rather than hang: total wall-clock is ~90s (20+30+20+20), empirically
@@ -12229,6 +11958,132 @@ mod tests {
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(user_id)
             .execute(&pool).await.expect("cleanup");
+    }
+
+    // nels-oss#3 (spec A8): with a BYO OpenAI key saved AND a Nels GEMINI_API_KEY
+    // set, a chat turn must go to OpenAI only, execute the action, tag usage
+    // 'byo', and send zero requests carrying the Nels key.
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn chat_byo_never_calls_nels_gemini() {
+        let _env = GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct Restore(Vec<(&'static str, Option<String>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+        let _r = Restore(
+            ["GEMINI_API_KEY", "GEMINI_API_BASE", "OPENAI_API_BASE"]
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect(),
+        );
+
+        let gemini = wiremock::MockServer::start().await;
+        let openai = wiremock::MockServer::start().await;
+        std::env::set_var("GEMINI_API_KEY", "NELS-KEY");
+        std::env::set_var("GEMINI_API_BASE", gemini.uri());
+        std::env::set_var("OPENAI_API_BASE", openai.uri());
+        wiremock::Mock::given(wiremock::matchers::header("x-goog-api-key", "NELS-KEY"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&gemini)
+            .await;
+        let reply = serde_json::json!({
+            "thought": "", "action": "ADD_TRANSACTION",
+            "action_params": {"amount": 12.5, "description": "coffee", "category_name": "Dining"},
+            "response_text": "Logged $12.50 for coffee."
+        });
+        wiremock::Mock::given(wiremock::matchers::path("/v1/chat/completions"))
+            .and(wiremock::matchers::header("authorization", "Bearer sk-user"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": reply.to_string()}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+            })))
+            .mount(&openai)
+            .await;
+        // The title call also goes to OpenAI (text mode); it matches the same mock and is harmless.
+
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
+        });
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let cipher = std::sync::Arc::new(crate::auth::test_cipher());
+        let state = AppState {
+            db: pool.clone(),
+            cipher: cipher.clone(),
+            webauthn: std::sync::Arc::new(crate::passkeys::WebauthnRegistry::for_test()),
+        };
+        let user_id = uuid::Uuid::new_v4();
+        let budget_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+            .bind(user_id)
+            .bind(format!("byo-{user_id}@example.test"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO budgets (id, owner_id, name, time_frame, budget_limit, is_default) \
+             VALUES ($1,$2,'Home','monthly',500.0,TRUE)",
+        )
+        .bind(budget_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO user_ai_providers (user_id, provider, encrypted_key, key_last4, last_verified_at) \
+             VALUES ($1,'openai',$2,'user',NOW())",
+        )
+        .bind(user_id)
+        .bind(cipher.encrypt("sk-user").unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let res = chat_endpoint(
+            axum::extract::State(state),
+            axum::Extension(user_id),
+            axum::Json(ChatRequest {
+                message: "I spent 12.50 on coffee".into(),
+                budget_id: None,
+                conversation_id: None,
+                locale: None,
+            }),
+        )
+        .await
+        .expect("chat ok");
+        assert!(res.0.action_taken.is_some(), "action executed: {:?}", res.0.response);
+        assert!(res.0.ai_provider_error.is_none());
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE budget_id=$1")
+            .bind(budget_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let src: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT key_source FROM llm_usage WHERE user_id=$1")
+                .bind(user_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(src, vec!["byo".to_string()]);
+        let emb: Option<bool> =
+            sqlx::query_scalar("SELECT embedding IS NULL FROM transactions WHERE budget_id=$1")
+                .bind(budget_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(emb, Some(true), "OpenAI users get NULL embeddings (spec A6)");
+        // wiremock verifies .expect(0) on drop of `gemini`
+
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&pool).await;
     }
 
     #[tokio::test]
@@ -15161,82 +15016,6 @@ mod tests {
                 .await
                 .expect("cleanup user");
         }
-    }
-
-    // record_llm_usage persists exactly one row carrying the supplied token
-    // counts for a real user (issue #140, AC #2).
-    #[tokio::test]
-    #[ignore = "requires Postgres + pgvector; run via: cargo test -- --ignored"]
-    async fn record_llm_usage_persists_one_row() {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
-        });
-        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
-
-        let user_id = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
-            .bind(user_id)
-            .bind(format!("llm-usage-{user_id}@example.test"))
-            .execute(&pool)
-            .await
-            .expect("seed user");
-
-        record_llm_usage(&pool, user_id, "gemini-2.5-flash", "chat", 10, 20, 5, 35).await;
-
-        let (count, model, call_type, input_t, output_t, thinking_t, total_t): (i64, String, String, i32, i32, i32, i32) =
-            sqlx::query_as(
-                "SELECT COUNT(*), MAX(model), MAX(call_type), MAX(input_tokens), MAX(output_tokens), MAX(thinking_tokens), MAX(total_tokens) \
-                 FROM llm_usage WHERE user_id = $1",
-            )
-            .bind(user_id)
-            .fetch_one(&pool)
-            .await
-            .expect("query llm_usage");
-
-        assert_eq!(count, 1, "exactly one llm_usage row recorded");
-        assert_eq!(model, "gemini-2.5-flash");
-        assert_eq!(call_type, "chat");
-        assert_eq!(input_t, 10);
-        assert_eq!(output_t, 20);
-        assert_eq!(thinking_t, 5);
-        assert_eq!(total_t, 35);
-
-        // Cleanup (FK ON DELETE CASCADE would also clear llm_usage, but be explicit).
-        sqlx::query("DELETE FROM llm_usage WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("cleanup llm_usage");
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("cleanup user");
-    }
-
-    // AC #6 fail-safe: a usage-write failure (here an FK violation from a
-    // non-existent user_id) must be swallowed — record_llm_usage returns ()
-    // without panicking and inserts no row.
-    #[tokio::test]
-    #[ignore = "requires Postgres + pgvector; run via: cargo test -- --ignored"]
-    async fn record_llm_usage_swallows_write_failure() {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:postgrespassword@localhost:6153/budget_rag".to_string()
-        });
-        let pool = sqlx::PgPool::connect(&url).await.expect("connect to test db");
-
-        // No such user — the FK to users(id) must fail, and the helper must
-        // swallow that error rather than panic or propagate.
-        let bogus_user_id = uuid::Uuid::new_v4();
-        record_llm_usage(&pool, bogus_user_id, "m", "chat", 1, 1, 1, 1).await;
-
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage WHERE user_id = $1")
-                .bind(bogus_user_id)
-                .fetch_one(&pool)
-                .await
-                .expect("query llm_usage");
-        assert_eq!(count, 0, "FK violation must leave no llm_usage row");
     }
 
     // ===== Multi-category chat creation (#166) =====
@@ -19125,7 +18904,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("visa payment".to_string());
         p.excluded = Some(true);
-        let (log, err) = super::chat_exclude_transaction(&state, uuid::Uuid::new_v4(), None, Some(&p)).await;
+        let (log, err) = super::chat_exclude_transaction(&state, uuid::Uuid::new_v4(), None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
     }
 
@@ -19254,7 +19033,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, None, Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19262,14 +19041,14 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("   ".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "empty locator must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
         // 3. Locator set, but no new values to apply.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no new values must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19278,7 +19057,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no embedding key must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19351,27 +19130,27 @@ mod tests {
         // 1. No active budget.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, None, Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 2. Empty locator.
         let mut p = blank_action_params();
         p.transaction_match = Some("   ".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "empty locator must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 3. No locator at all (None params field).
         let p = blank_action_params();
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "missing locator must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 4. Locator set, but no GEMINI_API_KEY locally -> can't resolve the target.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "no embedding key must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
@@ -19386,7 +19165,7 @@ mod tests {
     // behavior that are actually NEW here: TRANSACTION_LOOKUP_BY_EMBEDDING now
     // selects transaction_date, and PendingDeletion.name is built from it. A
     // full end-to-end run through chat_delete_transaction (which embeds the
-    // locator via get_gemini_embedding) needs a real GEMINI_API_KEY and is not
+    // locator via llm::embed_for) needs a real Gemini key and is not
     // driveable locally — the same pre-existing limitation
     // transaction_lookup_and_update_sql_round_trip works around for
     // EDIT_TRANSACTION by seeding embeddings directly and querying
@@ -19665,7 +19444,8 @@ mod tests {
     }
 
     // Backfill mechanics + idempotency (#195) without a live Gemini API:
-    //  - the empty-key short-circuit returns Ok(0) (the function runs, no network);
+    //  - with no Nels GEMINI_API_KEY, a run leaves this Nels-hosted owner's rows
+    //    untouched (nels-oss#3: the owner has no embedder, so nothing is selected);
     //  - the "only NULLs" predicate the backfill SELECT uses leaves zero rows for a
     //    budget whose transactions already have embeddings, so a real re-run would
     //    update none of them.
@@ -19726,11 +19506,52 @@ mod tests {
         .expect("count null embeddings");
         assert_eq!(null_count, 0, "already-embedded rows are not candidates for backfill");
 
-        // Empty key short-circuits with no network call and reports zero updates.
-        let updated = crate::backfill::backfill_transaction_embeddings(&pool, "")
+        // nels-oss#3: with no Nels GEMINI_API_KEY this Nels-hosted owner is not
+        // eligible, so its rows are untouched. GEMINI_API_BASE points at an empty
+        // mock so a stray BYO-gemini row elsewhere in the shared DB can never reach
+        // the real Google API. A global updated-count is not asserted: the backfill
+        // scans the whole shared DB.
+        {
+            struct Restore(Vec<(&'static str, Option<String>)>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    for (k, v) in &self.0 {
+                        match v {
+                            Some(v) => std::env::set_var(k, v),
+                            None => std::env::remove_var(k),
+                        }
+                    }
+                }
+            }
+            let _restore = Restore(
+                ["GEMINI_API_KEY", "GEMINI_API_BASE"]
+                    .iter()
+                    .map(|k| (*k, std::env::var(k).ok()))
+                    .collect(),
+            );
+            let empty_gemini = wiremock::MockServer::start().await;
+            std::env::remove_var("GEMINI_API_KEY");
+            std::env::set_var("GEMINI_API_BASE", empty_gemini.uri());
+
+            let null_before: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE budget_id = $1 AND embedding IS NULL",
+            )
+            .bind(budget_id)
+            .fetch_one(&pool)
             .await
-            .expect("backfill runs");
-        assert_eq!(updated, 0, "empty GEMINI_API_KEY backfills nothing");
+            .expect("count null embeddings before backfill");
+            crate::backfill::backfill_transaction_embeddings(&pool, &crate::auth::test_cipher())
+                .await
+                .expect("backfill runs");
+            let null_after: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM transactions WHERE budget_id = $1 AND embedding IS NULL",
+            )
+            .bind(budget_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count null embeddings after backfill");
+            assert_eq!(null_before, null_after, "a keyless backfill leaves this budget's rows unchanged");
+        }
 
         // Simulate one backfill step on a fresh NULL row, then confirm the budget
         // has no remaining NULLs — a re-run would update zero of these rows.

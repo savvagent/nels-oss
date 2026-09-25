@@ -19,6 +19,7 @@ mod passkeys;
 mod auth;
 mod admin;
 mod account;
+mod ai_provider;
 mod budget;
 mod goals;
 mod notifications;
@@ -27,6 +28,9 @@ mod reports;
 mod r#rag;
 mod github;
 mod usage;
+mod llm;
+#[cfg(test)]
+mod llm_eval;
 mod backfill;
 mod billing;
 mod financial_connections;
@@ -194,19 +198,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "Failed to purge old issue-filing rate-limit rows"),
             }
+            match llm::purge_old_key_validation_attempts(&cleanup_pool).await {
+                Ok(n) if n > 0 => tracing::info!(cleared = n, "Purged old AI-key validation attempts"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "Failed to purge old AI-key validation attempts"),
+            }
         }
     });
 
     // One-shot backfill of transaction embeddings (#195), opt-in via
     // BACKFILL_TRANSACTION_EMBEDDINGS=1. Spawned non-blocking so a normal boot is
     // unaffected; it walks rows with a NULL embedding and fills them. Idempotent —
-    // a re-run after a full pass updates nothing. Needs GEMINI_API_KEY to embed.
+    // a re-run after a full pass updates nothing. Each row is embedded with its
+    // budget owner's resolved provider (nels-oss#3): Nels-hosted owners need Nels's
+    // Gemini key, while BYO Gemini owners are embedded with their own key even when
+    // Nels has none. BYO OpenAI/Anthropic owners are skipped (they cannot embed).
     if std::env::var("BACKFILL_TRANSACTION_EMBEDDINGS").as_deref() == Ok("1") {
         let backfill_pool = state.db.clone();
-        let backfill_api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+        let backfill_cipher = state.cipher.clone();
         tokio::spawn(async move {
             tracing::info!("Starting one-shot transaction embedding backfill...");
-            match backfill::backfill_transaction_embeddings(&backfill_pool, &backfill_api_key).await {
+            match backfill::backfill_transaction_embeddings(&backfill_pool, &backfill_cipher).await {
                 Ok(n) => tracing::info!(updated = n, "Transaction embedding backfill complete"),
                 Err(e) => tracing::warn!(error = %e, "Transaction embedding backfill failed"),
             }
@@ -312,6 +324,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Authenticated user's lifetime LLM token totals (#174). user_id is
         // derived from the auth Extension, never the client → /api/user/token-stats.
         .route("/user/token-stats", get(usage::token_stats))
+        // Per-user model provider / BYO key (nels-oss#3). User-scoped; the key is
+        // write-only from the client's point of view.
+        .route("/user/ai-provider", get(ai_provider::get_ai_provider)
+            .put(ai_provider::put_ai_provider)
+            .delete(ai_provider::delete_ai_provider))
 
         .route("/account/export", get(account::export_account))
         .route("/account/delete-challenge", post(account::delete_challenge))
