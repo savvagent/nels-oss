@@ -12,7 +12,7 @@
 {"id":"seed-categories","message":"yes, add the usual starter categories","expect_action":"SEED_CATEGORIES","expect_params":{}}
 {"id":"delete-category","message":"delete the Dining category","expect_action":"DELETE_CATEGORY","expect_params":{"category_name":"Dining"}}
 {"id":"update-category-rename","message":"rename Dining to Eating Out","expect_action":"UPDATE_CATEGORY","expect_params":{"category_name":"Dining","new_category_name":"Eating Out"}}
-{"id":"set-category-limit","message":"set the Groceries limit to 650","expect_action":"CREATE_CATEGORY","expect_params":{"category_name":"Groceries","category_limit":650}}
+{"id":"set-category-limit","message":"set the Groceries limit to 650","expect_action":"CREATE_CATEGORY","also_accept":["UPDATE_CATEGORY"],"expect_params":{"category_name":"Groceries","category_limit":650}}
 {"id":"category-rollover","message":"let unspent Groceries money roll over each month","expect_action":"SET_CATEGORY_ROLLOVER","expect_params":{"category_name":"Groceries","category_rollover":true}}
 {"id":"category-fund","message":"make Groceries a sinking fund","expect_action":"SET_CATEGORY_FUND","expect_params":{"category_name":"Groceries","is_fund":true}}
 {"id":"delete-budget","message":"delete the Vacation budget","expect_action":"DELETE_BUDGET","expect_params":{"target_budget_name":"Vacation"}}

@@ -31,3 +31,7 @@ To evaluate a non-default model, set the matching `LLM_MODEL_GEMINI`, `LLM_MODEL
 - `backend/evals/chat_actions.jsonl` must have at least one fixture for every action in the prompt, and no fixture may expect an action the prompt does not offer. A unit test enforces both.
 - Some fixtures expect `NONE` on purpose. They cover the cases where the prompt tells the model to ask a question instead of acting: a new budget with no strategy (rule 2n), a dictated amount that could be dollars and cents run together (rule 1), an affordability check with no amount (rule 20d), a balance question with no category (rule 20c), and a complaint that isn't a bug report (rule 19).
 - If you change a prompt rule, re-check the fixtures it touches before you re-run the eval.
+
+## Alternative actions
+
+A fixture can list `also_accept` actions that production also handles correctly for that message. `set-category-limit` accepts `UPDATE_CATEGORY` as well as `CREATE_CATEGORY`: the prompt prescribes the upsert, but the `UPDATE_CATEGORY` arm honors a limit sent without a new name (#132). Params are still checked. Use this only when the chat handler really does produce the same result; never use it to excuse a wrong action.

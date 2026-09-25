@@ -20,6 +20,11 @@ pub(crate) struct Fixture {
     pub id: String,
     pub message: String,
     pub expect_action: String,
+    /// Other actions production handles correctly for this message. For example,
+    /// a limit-set routed to UPDATE_CATEGORY is honored by that arm's #132
+    /// limit branch even though the prompt prescribes CREATE_CATEGORY.
+    #[serde(default)]
+    pub also_accept: Vec<String>,
     #[serde(default)]
     pub expect_params: Map<String, Value>,
 }
@@ -95,7 +100,9 @@ pub(crate) fn score(fx: &Fixture, raw: &str) -> Outcome {
         Ok(v) if parsed => v,
         _ => return Outcome { parsed: false, action_ok: false, params_ok: false },
     };
-    let action_ok = v.get("action").and_then(Value::as_str) == Some(fx.expect_action.as_str());
+    let got = v.get("action").and_then(Value::as_str);
+    let action_ok = got == Some(fx.expect_action.as_str())
+        || got.is_some_and(|a| fx.also_accept.iter().any(|x| x == a));
     let params = v.get("action_params").and_then(Value::as_object);
     let params_ok = action_ok
         && fx
@@ -213,6 +220,7 @@ mod tests {
             id: "t".into(),
             message: "m".into(),
             expect_action: action.into(),
+            also_accept: vec![],
             expect_params: params.as_object().cloned().unwrap_or_default(),
         }
     }
@@ -283,12 +291,27 @@ mod tests {
         // The reverse: no fixture may expect an action the prompt does not offer.
         for f in &fixtures {
             assert!(actions.contains(&f.expect_action.as_str()), "fixture {} expects unknown action {}", f.id, f.expect_action);
+            for a in &f.also_accept {
+                assert!(actions.contains(&a.as_str()), "fixture {} also accepts unknown action {a}", f.id);
+            }
         }
         // Fixture ids are unique, so the report's failure table is unambiguous.
         let mut ids: Vec<&str> = fixtures.iter().map(|f| f.id.as_str()).collect();
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), fixtures.len(), "duplicate fixture id");
+    }
+
+    #[test]
+    fn also_accept_counts_an_alternative_action_and_still_checks_params() {
+        let mut f = fx("CREATE_CATEGORY", serde_json::json!({"category_name": "Groceries", "category_limit": 650}));
+        f.also_accept = vec!["UPDATE_CATEGORY".into()];
+        let alt = r#"{"action":"UPDATE_CATEGORY","action_params":{"category_name":"Groceries","category_limit":650},"response_text":"ok"}"#;
+        assert_eq!(score(&f, alt), Outcome { parsed: true, action_ok: true, params_ok: true });
+        let alt_wrong = alt.replace("650", "600");
+        assert_eq!(score(&f, &alt_wrong), Outcome { parsed: true, action_ok: true, params_ok: false });
+        let other = alt.replace("UPDATE_CATEGORY", "DELETE_CATEGORY");
+        assert!(!score(&f, &other).action_ok);
     }
 
     #[test]
