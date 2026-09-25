@@ -243,6 +243,11 @@ async fn map_status_error(provider: Provider, res: reqwest::Response) -> LlmErro
     if provider == Provider::Gemini && status == 400 && body.contains("API_KEY_INVALID") {
         return LlmError::Auth;
     }
+    // Anthropic reports an unfunded account as 400, not 402/429. Treat it as a
+    // quota problem so the user is told to check their account, not "status 400".
+    if provider == Provider::Anthropic && status == 400 && body.contains("credit balance") {
+        return LlmError::RateLimited;
+    }
     LlmError::from_status(status)
 }
 
@@ -1087,6 +1092,31 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(v["action"], "NONE");
         assert_eq!(out.usage, TokenUsage { input: 20, output: 5, thinking: 0, total: 25 });
+    }
+
+    // Anthropic reports an unfunded account as HTTP 400 ("credit balance is too
+    // low"), and GET /v1/models still succeeds for it, so a user can save such a
+    // key. Map it to RateLimited so chat says "out of quota" rather than a bare 400.
+    #[tokio::test]
+    async fn anthropic_400_credit_balance_maps_to_rate_limited() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("ANTHROPIC_API_BASE", &server.uri());
+        Mock::given(method("POST")).and(header("x-api-key", "broke"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "type": "error",
+                "error": {"type": "invalid_request_error",
+                          "message": "Your credit balance is too low to access the Anthropic API."}
+            })))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(header("x-api-key", "other"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens: too large"}
+            })))
+            .mount(&server).await;
+        let t = std::time::Duration::from_secs(5);
+        assert_eq!(generate_text(&an("broke"), "P", t).await.unwrap_err(), LlmError::RateLimited);
+        assert_eq!(generate_text(&an("other"), "P", t).await.unwrap_err(), LlmError::Upstream(400));
     }
 
     #[tokio::test]
