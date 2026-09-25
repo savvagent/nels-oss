@@ -14,6 +14,14 @@
     planLabelKey,
     needsPaymentUpdate,
   } from "./subscriptionDisplay.js";
+  import {
+    PROVIDER_TERMS_URLS,
+    providerLabelKey,
+    statusLineKey,
+    canSave,
+    embeddingsNoteVisible,
+    providerRetired,
+  } from "./aiProviderView.js";
 
   let {
     fetchApi,
@@ -30,6 +38,14 @@
   let backButtonEl = $state(null);
   let tokenStats = $state(null);
   let tokenError = $state(false);
+  // AI provider card (nels-oss#3). `aiView` is the GET/PUT /user/ai-provider
+  // response; `aiKey` is only ever held in memory until it is submitted.
+  let aiView = $state(null);
+  let aiChoice = $state("nels");
+  let aiProvider = $state("");
+  let aiKey = $state("");
+  let aiSaving = $state(false);
+  let aiError = $state("");
 
   // Active locale base (region stripped) for the language <select> value.
   let activeLang = $derived(($locale || "en").slice(0, 2));
@@ -64,6 +80,64 @@
       cancelled = true;
     };
   });
+
+  // Point the form at a freshly loaded provider view. The <select> must always
+  // hold an OFFERED provider, so a retired saved provider falls back to the
+  // first available one (the retired key keeps working until replaced).
+  function applyAiView(view) {
+    aiView = view;
+    aiChoice = view?.mode === "byo" ? "own" : "nels";
+    const available = view?.available_providers ?? [];
+    aiProvider = available.includes(view?.provider) ? view.provider : (available[0] ?? "");
+  }
+
+  // Load the AI provider view on mount, same cancellation pattern as the
+  // token-stats effect above.
+  $effect(() => {
+    if (!fetchApi) return;
+    let cancelled = false;
+    fetchApi("/user/ai-provider")
+      .then((view) => {
+        if (!cancelled) applyAiView(view);
+      })
+      .catch(() => {
+        if (!cancelled) aiError = $_("aiProvider.loadError");
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function saveAiKey() {
+    aiSaving = true;
+    aiError = "";
+    try {
+      const view = await fetchApi("/user/ai-provider", {
+        method: "PUT",
+        body: JSON.stringify({ provider: aiProvider, api_key: aiKey.trim() }),
+      });
+      applyAiView(view);
+      aiKey = "";
+    } catch (e) {
+      aiError = $_("aiProvider.saveError", { values: { message: e?.message ?? "" } });
+    } finally {
+      aiSaving = false;
+    }
+  }
+
+  async function removeAiKey() {
+    aiSaving = true;
+    aiError = "";
+    try {
+      await fetchApi("/user/ai-provider", { method: "DELETE" });
+      applyAiView(await fetchApi("/user/ai-provider"));
+      aiKey = "";
+    } catch (e) {
+      aiError = $_("aiProvider.saveError", { values: { message: e?.message ?? "" } });
+    } finally {
+      aiSaving = false;
+    }
+  }
 
   // Theme options in order: light=Sun, system=Monitor, dark=Moon.
   const THEME_OPTIONS = [
@@ -222,6 +296,114 @@
             </div>
           </div>
         {/if}
+      </div>
+
+      <!-- AI provider (nels-oss#3) -->
+      <div class="bg-base-200 border border-base-300 rounded-xl p-4 space-y-3 lg:col-span-2">
+        <h4 class="font-semibold text-sm text-base-content/70 uppercase">{$_("aiProvider.title")}</h4>
+        <p class="text-sm text-base-content/80">{$_("aiProvider.intro")}</p>
+        <p class="text-sm" role="status">
+          {$_(statusLineKey(aiView), {
+            values: {
+              provider: aiView?.provider ? $_(providerLabelKey(aiView.provider)) : "",
+              last4: aiView?.key_last4 ?? "",
+              date: aiView?.last_verified_at
+                ? new Date(aiView.last_verified_at).toLocaleDateString($locale)
+                : "",
+            },
+          })}
+        </p>
+        <fieldset class="space-y-2">
+          <legend class="sr-only">{$_("aiProvider.title")}</legend>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="radio" class="radio radio-sm" name="ai-provider-choice" bind:group={aiChoice} value="nels" />
+            {$_("aiProvider.optionNels")}
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              class="radio radio-sm"
+              name="ai-provider-choice"
+              bind:group={aiChoice}
+              value="own"
+              disabled={!aiView?.available_providers?.length}
+            />
+            {$_("aiProvider.optionOwn")}
+          </label>
+        </fieldset>
+        {#if aiChoice === "own"}
+          <div class="grid gap-2 sm:grid-cols-2">
+            <label class="form-control">
+              <span class="label-text text-sm">{$_("aiProvider.providerLabel")}</span>
+              <select class="select select-sm select-bordered" bind:value={aiProvider}>
+                {#each aiView?.available_providers ?? [] as p (p)}
+                  <option value={p}>{$_(providerLabelKey(p))}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="form-control">
+              <span class="label-text text-sm">{$_("aiProvider.keyLabel")}</span>
+              <input
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                class="input input-sm input-bordered"
+                bind:value={aiKey}
+                maxlength="512"
+              />
+            </label>
+          </div>
+          <p class="text-xs text-base-content/60">{$_("aiProvider.keyHint")}</p>
+          <p class="text-sm">
+            {$_("aiProvider.dataUseOwn", { values: { provider: $_(providerLabelKey(aiProvider)) } })}
+            {#if PROVIDER_TERMS_URLS[aiProvider]}
+              <a class="link" href={PROVIDER_TERMS_URLS[aiProvider]} target="_blank" rel="noopener noreferrer">
+                {$_("aiProvider.termsLink", { values: { provider: $_(providerLabelKey(aiProvider)) } })}
+              </a>
+            {/if}
+          </p>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              disabled={aiSaving || !canSave(aiProvider, aiKey, aiView?.available_providers)}
+              onclick={saveAiKey}
+            >
+              {aiSaving ? $_("aiProvider.saving") : $_("aiProvider.save")}
+            </button>
+            {#if aiView?.mode === "byo"}
+              <button type="button" class="btn btn-sm btn-ghost" disabled={aiSaving} onclick={removeAiKey}>
+                {$_("aiProvider.remove")}
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <p class="text-sm">
+            {$_("aiProvider.dataUseNels")}
+            <a class="link" href={PROVIDER_TERMS_URLS.gemini} target="_blank" rel="noopener noreferrer">
+              {$_("aiProvider.termsLink", { values: { provider: $_("aiProvider.providerGemini") } })}
+            </a>
+          </p>
+          {#if aiView?.mode === "byo"}
+            <button type="button" class="btn btn-sm btn-ghost" disabled={aiSaving} onclick={removeAiKey}>
+              {$_("aiProvider.remove")}
+            </button>
+          {/if}
+        {/if}
+        {#if providerRetired(aiView)}
+          <p class="text-xs text-warning">
+            {$_("aiProvider.noLongerOffered", { values: { provider: $_(providerLabelKey(aiView.provider)) } })}
+          </p>
+        {/if}
+        {#if embeddingsNoteVisible(aiView)}
+          <p class="text-xs text-base-content/70">
+            {$_("aiProvider.embeddingsOff", { values: { provider: $_(providerLabelKey(aiView.provider)) } })}
+          </p>
+        {/if}
+        <p class="text-xs text-base-content/60">
+          {$_("aiProvider.dataUsePassesThrough")} {$_("aiProvider.dataUseShared")}
+        </p>
+        {#if aiError}<p class="text-sm text-error" role="alert">{aiError}</p>{/if}
       </div>
 
       <!-- Token usage -->
