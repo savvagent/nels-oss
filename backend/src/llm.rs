@@ -366,6 +366,198 @@ async fn gemini_embed(creds: &LlmCredentials, text: &str) -> Result<(Vec<f32>, T
     Ok((parsed.embedding.values, GemUsage::to_usage(parsed.usage)))
 }
 
+// ---------- OpenAI ----------
+
+#[derive(Deserialize)]
+struct OaMsg {
+    content: Option<String>,
+}
+#[derive(Deserialize)]
+struct OaChoice {
+    message: OaMsg,
+}
+#[derive(Deserialize)]
+struct OaDetails {
+    reasoning_tokens: Option<i32>,
+}
+#[derive(Deserialize)]
+struct OaUsage {
+    prompt_tokens: Option<i32>,
+    completion_tokens: Option<i32>,
+    total_tokens: Option<i32>,
+    completion_tokens_details: Option<OaDetails>,
+}
+#[derive(Deserialize)]
+struct OaResponse {
+    #[serde(default)]
+    choices: Vec<OaChoice>,
+    usage: Option<OaUsage>,
+}
+
+async fn openai_chat(
+    creds: &LlmCredentials,
+    messages: serde_json::Value,
+    json_mode: bool,
+    timeout: Duration,
+) -> Result<LlmOutput, LlmError> {
+    let mut body = serde_json::json!({ "model": creds.model, "messages": messages });
+    if json_mode {
+        // Requires the word "JSON" in the messages; Nels's system prompt has it (rule 22).
+        body["response_format"] = serde_json::json!({ "type": "json_object" });
+    }
+    let res = client(timeout)
+        .post(format!("{}/v1/chat/completions", Provider::OpenAi.api_base()))
+        .bearer_auth(creds.api_key())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| map_send_error(Provider::OpenAi, e))?;
+    if !res.status().is_success() {
+        return Err(map_status_error(Provider::OpenAi, res).await);
+    }
+    let parsed: OaResponse = res.json().await.map_err(|e| {
+        tracing::error!("openai response parse failed: {}", e.without_url());
+        LlmError::BadResponse
+    })?;
+    let usage = parsed
+        .usage
+        .map(|u| TokenUsage {
+            input: u.prompt_tokens.unwrap_or(0),
+            output: u.completion_tokens.unwrap_or(0),
+            thinking: u.completion_tokens_details.and_then(|d| d.reasoning_tokens).unwrap_or(0),
+            total: u.total_tokens.unwrap_or(0),
+        })
+        .unwrap_or_default();
+    let text = parsed
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|c| c.message.content)
+        .ok_or(LlmError::BadResponse)?;
+    Ok(LlmOutput { text, usage })
+}
+
+// ---------- Anthropic ----------
+
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+#[derive(Deserialize)]
+struct AnBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+    name: Option<String>,
+    input: Option<serde_json::Value>,
+}
+#[derive(Deserialize)]
+struct AnUsage {
+    input_tokens: Option<i32>,
+    output_tokens: Option<i32>,
+}
+#[derive(Deserialize)]
+struct AnResponse {
+    #[serde(default)]
+    content: Vec<AnBlock>,
+    usage: Option<AnUsage>,
+}
+
+async fn anthropic_messages(
+    creds: &LlmCredentials,
+    body: serde_json::Value,
+    timeout: Duration,
+) -> Result<AnResponse, LlmError> {
+    let res = client(timeout)
+        .post(format!("{}/v1/messages", Provider::Anthropic.api_base()))
+        .header("x-api-key", creds.api_key())
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| map_send_error(Provider::Anthropic, e))?;
+    if !res.status().is_success() {
+        return Err(map_status_error(Provider::Anthropic, res).await);
+    }
+    res.json().await.map_err(|e| {
+        tracing::error!("anthropic response parse failed: {}", e.without_url());
+        LlmError::BadResponse
+    })
+}
+
+fn anthropic_usage(u: Option<AnUsage>) -> TokenUsage {
+    u.map(|u| {
+        let (i, o) = (u.input_tokens.unwrap_or(0), u.output_tokens.unwrap_or(0));
+        TokenUsage { input: i, output: o, thinking: 0, total: i + o }
+    })
+    .unwrap_or_default()
+}
+
+async fn anthropic_json(creds: &LlmCredentials, system: &str, user: &str, timeout: Duration) -> Result<LlmOutput, LlmError> {
+    let body = serde_json::json!({
+        "model": creds.model,
+        "max_tokens": 4096,
+        "system": system,
+        "messages": [{ "role": "user", "content": user }],
+        "tools": [{
+            "name": "respond",
+            "description": "Return your complete reply as the JSON object described in the system prompt.",
+            "input_schema": { "type": "object" }
+        }],
+        "tool_choice": { "type": "tool", "name": "respond" }
+    });
+    let parsed = anthropic_messages(creds, body, timeout).await?;
+    let usage = anthropic_usage(parsed.usage);
+    let input = parsed
+        .content
+        .into_iter()
+        .find(|b| b.kind == "tool_use" && b.name.as_deref() == Some("respond"))
+        .and_then(|b| b.input)
+        .filter(|v| v.is_object())
+        .ok_or(LlmError::BadResponse)?;
+    let text = serde_json::to_string(&input).map_err(|_| LlmError::BadResponse)?;
+    Ok(LlmOutput { text, usage })
+}
+
+async fn anthropic_text(creds: &LlmCredentials, prompt: &str, timeout: Duration) -> Result<LlmOutput, LlmError> {
+    let body = serde_json::json!({
+        "model": creds.model,
+        "max_tokens": 1024,
+        "messages": [{ "role": "user", "content": prompt }]
+    });
+    let parsed = anthropic_messages(creds, body, timeout).await?;
+    let usage = anthropic_usage(parsed.usage);
+    let text: String = parsed
+        .content
+        .into_iter()
+        .filter(|b| b.kind == "text")
+        .filter_map(|b| b.text)
+        .collect();
+    if text.is_empty() {
+        return Err(LlmError::BadResponse);
+    }
+    Ok(LlmOutput { text, usage })
+}
+
+/// Cheap, token-free liveness check of a user-supplied key: list models.
+pub async fn validate_key(provider: Provider, key: &str) -> Result<(), LlmError> {
+    let c = client(Duration::from_secs(10));
+    let req = match provider {
+        Provider::Gemini => c
+            .get(format!("{}/v1beta/models", provider.api_base()))
+            .header("x-goog-api-key", key),
+        Provider::OpenAi => c.get(format!("{}/v1/models", provider.api_base())).bearer_auth(key),
+        Provider::Anthropic => c
+            .get(format!("{}/v1/models", provider.api_base()))
+            .header("x-api-key", key)
+            .header("anthropic-version", ANTHROPIC_VERSION),
+    };
+    let res = req.send().await.map_err(|e| map_send_error(provider, e))?;
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(map_status_error(provider, res).await)
+    }
+}
+
 // ---------- public entry points ----------
 
 /// One structured-JSON completion. Returns the raw JSON text; the caller parses
@@ -378,7 +570,14 @@ pub async fn generate_json(
 ) -> Result<LlmOutput, LlmError> {
     match creds.provider {
         Provider::Gemini => gemini_generate(creds, vec![system, user], "application/json", timeout).await,
-        Provider::OpenAi | Provider::Anthropic => Err(LlmError::BadResponse),
+        Provider::OpenAi => {
+            let msgs = serde_json::json!([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user}
+            ]);
+            openai_chat(creds, msgs, true, timeout).await
+        }
+        Provider::Anthropic => anthropic_json(creds, system, user, timeout).await,
     }
 }
 
@@ -390,7 +589,10 @@ pub async fn generate_text(
 ) -> Result<LlmOutput, LlmError> {
     match creds.provider {
         Provider::Gemini => gemini_generate(creds, vec![prompt], "text/plain", timeout).await,
-        Provider::OpenAi | Provider::Anthropic => Err(LlmError::BadResponse),
+        Provider::OpenAi => {
+            openai_chat(creds, serde_json::json!([{"role": "user", "content": prompt}]), false, timeout).await
+        }
+        Provider::Anthropic => anthropic_text(creds, prompt, timeout).await,
     }
 }
 
@@ -594,5 +796,146 @@ mod tests {
             .await;
         let err = generate_text(&gem("k"), "P", std::time::Duration::from_millis(200)).await.unwrap_err();
         assert_eq!(err, LlmError::Timeout);
+    }
+
+    fn oa(key: &str) -> LlmCredentials {
+        LlmCredentials::new(Provider::OpenAi, key.to_string(), KeySource::Byo)
+    }
+    fn an(key: &str) -> LlmCredentials {
+        LlmCredentials::new(Provider::Anthropic, key.to_string(), KeySource::Byo)
+    }
+
+    #[tokio::test]
+    async fn openai_json_mode_request_and_usage() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("OPENAI_API_BASE", &server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-u"))
+            .and(body_partial_json(serde_json::json!({
+                "model": "gpt-4.1-mini",
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": "SYS JSON"}, {"role": "user", "content": "U"}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "{\"action\":\"NONE\"}"}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11,
+                          "completion_tokens_details": {"reasoning_tokens": 1}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = generate_json(&oa("sk-u"), "SYS JSON", "U", std::time::Duration::from_secs(5)).await.unwrap();
+        assert_eq!(out.text, "{\"action\":\"NONE\"}");
+        assert_eq!(out.usage, TokenUsage { input: 7, output: 4, thinking: 1, total: 11 });
+    }
+
+    #[tokio::test]
+    async fn openai_text_has_no_response_format_and_null_content_is_bad_response() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("OPENAI_API_BASE", &server.uri());
+        Mock::given(method("POST")).and(header("authorization", "Bearer good"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "Title here"}}]
+            })))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(header("authorization", "Bearer null"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": null}}]
+            })))
+            .mount(&server).await;
+        let t = std::time::Duration::from_secs(5);
+        assert_eq!(generate_text(&oa("good"), "P", t).await.unwrap().text, "Title here");
+        let reqs = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+        assert!(body.get("response_format").is_none());
+        assert_eq!(generate_text(&oa("null"), "P", t).await.unwrap_err(), LlmError::BadResponse);
+    }
+
+    #[tokio::test]
+    async fn anthropic_json_forces_respond_tool_and_serializes_input() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("ANTHROPIC_API_BASE", &server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "ak"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(body_partial_json(serde_json::json!({
+                "model": "claude-haiku-4-5",
+                "system": "SYS",
+                "tool_choice": {"type": "tool", "name": "respond"},
+                "messages": [{"role": "user", "content": "U"}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "tool_use", "name": "respond",
+                             "input": {"action": "NONE", "response_text": "hi", "thought": ""}}],
+                "usage": {"input_tokens": 20, "output_tokens": 5}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = generate_json(&an("ak"), "SYS", "U", std::time::Duration::from_secs(5)).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(v["action"], "NONE");
+        assert_eq!(out.usage, TokenUsage { input: 20, output: 5, thinking: 0, total: 25 });
+    }
+
+    #[tokio::test]
+    async fn anthropic_json_without_tool_use_is_bad_response() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("ANTHROPIC_API_BASE", &server.uri());
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "I refuse"}]
+            })))
+            .mount(&server)
+            .await;
+        let err = generate_json(&an("ak"), "S", "U", std::time::Duration::from_secs(5)).await.unwrap_err();
+        assert_eq!(err, LlmError::BadResponse);
+    }
+
+    #[tokio::test]
+    async fn anthropic_text_joins_text_blocks() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g = set_base("ANTHROPIC_API_BASE", &server.uri());
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "Grocery "}, {"type": "text", "text": "plan"}],
+                "usage": {"input_tokens": 1, "output_tokens": 2}
+            })))
+            .mount(&server)
+            .await;
+        let out = generate_text(&an("ak"), "P", std::time::Duration::from_secs(5)).await.unwrap();
+        assert_eq!(out.text, "Grocery plan");
+    }
+
+    #[tokio::test]
+    async fn validate_key_per_provider() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let _g1 = set_base("GEMINI_API_BASE", &server.uri());
+        let _g2 = set_base("OPENAI_API_BASE", &server.uri());
+        let _g3 = set_base("ANTHROPIC_API_BASE", &server.uri());
+        Mock::given(method("GET")).and(path("/v1beta/models")).and(header("x-goog-api-key", "g"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"models": []})))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(path("/v1/models")).and(header("authorization", "Bearer o"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(path("/v1/models")).and(header("x-api-key", "a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(path("/v1/models")).and(header("authorization", "Bearer bad"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server).await;
+        assert_eq!(validate_key(Provider::Gemini, "g").await, Ok(()));
+        assert_eq!(validate_key(Provider::OpenAi, "o").await, Ok(()));
+        assert_eq!(validate_key(Provider::Anthropic, "a").await, Ok(()));
+        assert_eq!(validate_key(Provider::OpenAi, "bad").await, Err(LlmError::Auth));
     }
 }
