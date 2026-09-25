@@ -202,9 +202,12 @@ pub struct ChatResponse {
     /// "System Update".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retirement_projection: Option<crate::retirement_projection::Projection>,
-    /// nels-oss#3: set when a BYO-key model call failed (or the stored key is
-    /// unreadable); an `LlmError::code()` string. The frontend offers an
-    /// "Open AI settings" action. Never set for Nels-hosted failures.
+    /// nels-oss#3: set when a BYO-key model call failed, or when the user has a
+    /// saved BYO row that can't be used (`key_unavailable`); an
+    /// `LlmError::code()` string. The frontend offers an "Open AI settings"
+    /// action. Never set for Nels-hosted failures, and never when the settings
+    /// lookup itself failed (`ConfigUnavailable`), since we can't tell then
+    /// whether the user is BYO.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_provider_error: Option<String>,
 }
@@ -287,7 +290,8 @@ fn llm_error_reply(err: crate::llm::LlmError, creds: Option<&crate::llm::LlmCred
     use crate::llm::{KeySource, LlmError};
     let byo = creds.filter(|c| c.source == KeySource::Byo).map(|c| c.provider.display_name());
     let response_text = match (err, byo) {
-        (LlmError::KeyUnavailable, _) => "I couldn't load your AI settings just now. Please try again in a moment. If you use your own API key and this keeps happening, re-enter it in Settings → AI provider.".to_string(),
+        (LlmError::KeyUnavailable, _) => "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.".to_string(),
+        (LlmError::ConfigUnavailable, _) => "I couldn't load your AI settings just now. Please try again in a moment.".to_string(),
         (LlmError::Auth, Some(p)) => format!("Your {p} key was rejected. Check or replace it in Settings → AI provider."),
         (LlmError::RateLimited, Some(p)) => format!("{p} says your key is out of quota or rate-limited. Try again later, or check your {p} account."),
         (LlmError::Timeout | LlmError::Transport, Some(p)) => format!("I couldn't reach {p}. Please try again in a moment."),
@@ -1651,7 +1655,11 @@ pub async fn chat_endpoint(
     // isn't a failure at all.
     let mut parsed_ai_res: AiStructuredResponse = match &ai_res {
         Err(e) => {
-            ai_provider_error = Some(e.code().to_string());
+            // Only a broken BYO row points the user at Settings. A failed
+            // lookup (ConfigUnavailable) may hit a Nels-hosted user.
+            if *e == crate::llm::LlmError::KeyUnavailable {
+                ai_provider_error = Some(e.code().to_string());
+            }
             llm_error_reply(*e, None)
         }
         Ok(crate::llm::Resolved::Llm(creds)) => {
@@ -8038,7 +8046,11 @@ mod tests {
         let r = llm_error_reply(crate::llm::LlmError::Upstream(503), Some(&nels));
         assert_eq!(r.response_text, "I hit a problem reaching my reasoning engine (status 503). Please try again in a moment.");
         let r = llm_error_reply(crate::llm::LlmError::KeyUnavailable, None);
-        assert!(r.response_text.contains("re-enter"));
+        assert_eq!(r.response_text, "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.");
+        assert_eq!(r.action, "NONE");
+        let r = llm_error_reply(crate::llm::LlmError::ConfigUnavailable, None);
+        assert_eq!(r.response_text, "I couldn't load your AI settings just now. Please try again in a moment.");
+        assert!(!r.response_text.contains("Settings"), "a lookup failure must not send a Nels-hosted user to AI settings");
         assert_eq!(r.action, "NONE");
     }
 

@@ -69,9 +69,13 @@ pub(crate) fn load_context() -> EvalContext {
 }
 
 /// Strings compare case-insensitively after trimming, numbers within 0.01,
-/// booleans exactly. Anything else (including a missing param) is a miss.
+/// booleans exactly. An expected object matches when every expected key
+/// matches recursively in the actual object (extra actual keys are ignored),
+/// so nested params such as `retirement_profile` can be checked. Anything
+/// else (including a missing param) is a miss.
 fn value_matches(want: &Value, got: Option<&Value>) -> bool {
     match (want, got) {
+        (Value::Object(w), Some(Value::Object(g))) => w.iter().all(|(k, wv)| value_matches(wv, g.get(k))),
         (Value::String(w), Some(Value::String(g))) => w.trim().to_lowercase() == g.trim().to_lowercase(),
         (Value::Number(w), Some(Value::Number(g))) => {
             (w.as_f64().unwrap_or(f64::NAN) - g.as_f64().unwrap_or(f64::NAN)).abs() < 0.01
@@ -125,12 +129,14 @@ pub(crate) fn report(provider: &str, model: &str, outcomes: &[(String, Outcome)]
 #[ignore = "live, paid: EVAL_PROVIDER=openai EVAL_API_KEY=... cargo test --bin backend live_chat_action_eval -- --ignored --nocapture"]
 async fn live_chat_action_eval() {
     use crate::llm::{generate_json, KeySource, LlmCredentials, Provider};
-    let provider = std::env::var("EVAL_PROVIDER")
-        .ok()
-        .and_then(|p| Provider::parse(&p))
-        .expect("set EVAL_PROVIDER to gemini|openai|anthropic");
-    let key = std::env::var("EVAL_API_KEY").expect("set EVAL_API_KEY");
-    let creds = LlmCredentials::new(provider, key.trim().to_string(), KeySource::Byo);
+    let set = |v: &str| std::env::var(v).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let (Some(provider_raw), Some(key)) = (set("EVAL_PROVIDER"), set("EVAL_API_KEY")) else {
+        eprintln!("live_chat_action_eval skipped: set EVAL_PROVIDER and EVAL_API_KEY to run it");
+        return;
+    };
+    let provider = Provider::parse(&provider_raw)
+        .unwrap_or_else(|| panic!("EVAL_PROVIDER={provider_raw:?} is not one of gemini|openai|anthropic"));
+    let creds = LlmCredentials::new(provider, key, KeySource::Byo);
     let ctx = load_context();
     let system = crate::rag::build_system_instructions(&ctx.as_prompt());
     let date = chrono::Utc::now().format("%Y-%m-%d");
@@ -166,7 +172,6 @@ async fn live_chat_action_eval() {
         std::fs::write(&path, report(provider.as_str(), &creds.model, &outcomes)).unwrap();
     }
     let md = report(provider.as_str(), &creds.model, &outcomes);
-    std::fs::write(&path, &md).unwrap();
     println!("{md}\nwritten to {path}");
 }
 
@@ -193,6 +198,25 @@ mod tests {
         let wrong_action = ok.replace("\"ADD_TRANSACTION\"", "\"NONE\"");
         assert!(!score(&f, &wrong_action).action_ok);
         assert_eq!(score(&f, "not json"), Outcome { parsed: false, action_ok: false, params_ok: false });
+    }
+
+    #[test]
+    fn nested_expected_params_match_recursively() {
+        let f = fx(
+            "SET_RETIREMENT_PROFILE",
+            serde_json::json!({"retirement_profile": {"country": "US", "birth_date": "1985-06-15", "current_gross_income": 120000}}),
+        );
+        let ok = r#"{"action":"SET_RETIREMENT_PROFILE","action_params":{"retirement_profile":{"country":"us","birth_date":"1985-06-15","current_gross_income":120000.0,"target_retirement_age":62}},"response_text":"ok"}"#;
+        assert_eq!(score(&f, ok), Outcome { parsed: true, action_ok: true, params_ok: true });
+        // A nested value mismatch fails.
+        let wrong = ok.replace("120000.0", "12000.0");
+        assert_eq!(score(&f, &wrong), Outcome { parsed: true, action_ok: true, params_ok: false });
+        // A missing nested key fails.
+        let missing = ok.replace(r#""birth_date":"1985-06-15","#, "");
+        assert!(!score(&f, &missing).params_ok);
+        // The nested fields at the top level instead of inside the object fail.
+        let flat = r#"{"action":"SET_RETIREMENT_PROFILE","action_params":{"country":"US","birth_date":"1985-06-15","current_gross_income":120000},"response_text":"ok"}"#;
+        assert!(!score(&f, flat).params_ok);
     }
 
     #[test]

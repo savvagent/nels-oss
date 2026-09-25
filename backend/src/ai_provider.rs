@@ -14,10 +14,18 @@ use crate::llm::{self, LlmError, Provider};
 const MAX_KEY_LEN: usize = 512;
 const VALIDATIONS_PER_HOUR: i64 = 10;
 
+/// The BYO providers a user may newly select, from the comma-separated
+/// `ENABLED_BYO_PROVIDERS` env var (unknown entries are ignored).
+///
+/// Fails CLOSED: unset or blank means NO BYO provider is offered. No provider
+/// has a committed live-eval result yet, so a forgotten secret must not ship
+/// unevaluated providers. This only gates new selections (`put_ai_provider`
+/// and `available_providers`); an already-saved key keeps working even when
+/// its provider isn't listed, because `llm::resolve_from` never consults it.
 pub fn enabled_byo_providers() -> Vec<Provider> {
     match std::env::var("ENABLED_BYO_PROVIDERS") {
         Ok(v) if !v.trim().is_empty() => v.split(',').filter_map(Provider::parse).collect(),
-        _ => Provider::ALL.to_vec(),
+        _ => Vec::new(),
     }
 }
 
@@ -223,15 +231,39 @@ mod tests {
         assert_eq!(key_last4("ключ-éé"), "ч-éé");
     }
 
+    /// Sets an env var for the life of the guard and restores the prior value
+    /// on drop (even if the test panics). Hold `GEMINI_ENV_LOCK` while it lives.
+    struct EnvGuard(&'static str, Option<String>);
+    impl EnvGuard {
+        fn set(var: &'static str, val: &str) -> Self {
+            let g = EnvGuard(var, std::env::var(var).ok());
+            std::env::set_var(var, val);
+            g
+        }
+        fn unset(var: &'static str) -> Self {
+            let g = EnvGuard(var, std::env::var(var).ok());
+            std::env::remove_var(var);
+            g
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
     #[test]
     fn enabled_providers_env_parsing() {
         let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var("ENABLED_BYO_PROVIDERS").ok();
-        std::env::remove_var("ENABLED_BYO_PROVIDERS");
-        assert_eq!(enabled_byo_providers().len(), 3);
+        let _g = EnvGuard::unset("ENABLED_BYO_PROVIDERS");
+        assert!(enabled_byo_providers().is_empty(), "unset must offer no BYO provider");
+        std::env::set_var("ENABLED_BYO_PROVIDERS", "   ");
+        assert!(enabled_byo_providers().is_empty(), "blank must offer no BYO provider");
         std::env::set_var("ENABLED_BYO_PROVIDERS", " openai , bogus,GEMINI ");
         assert_eq!(enabled_byo_providers(), vec![Provider::OpenAi, Provider::Gemini]);
-        match prev { Some(v) => std::env::set_var("ENABLED_BYO_PROVIDERS", v), None => std::env::remove_var("ENABLED_BYO_PROVIDERS") }
     }
 
     async fn state() -> AppState {
@@ -251,6 +283,7 @@ mod tests {
     #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
     async fn put_get_delete_round_trip_encrypts_and_never_returns_key() {
         let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _enabled = EnvGuard::set("ENABLED_BYO_PROVIDERS", "gemini,openai,anthropic");
         let server = MockServer::start().await;
         let prev = std::env::var("OPENAI_API_BASE").ok();
         std::env::set_var("OPENAI_API_BASE", server.uri());
@@ -294,6 +327,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
     async fn put_validation_and_rate_limit() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _enabled = EnvGuard::set("ENABLED_BYO_PROVIDERS", "gemini,openai,anthropic");
         let st = state().await;
         let uid = mk_user(&st.db).await;
         for (p, k) in [("openai", ""), ("openai", &"x".repeat(513)), ("mistral", "k")] {
@@ -313,6 +348,7 @@ mod tests {
     #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
     async fn put_rate_limit_is_atomic_under_concurrency() {
         let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _enabled = EnvGuard::set("ENABLED_BYO_PROVIDERS", "gemini,openai,anthropic");
         let server = MockServer::start().await;
         let prev = std::env::var("OPENAI_API_BASE").ok();
         std::env::set_var("OPENAI_API_BASE", server.uri());
@@ -333,6 +369,45 @@ mod tests {
         match prev { Some(v) => std::env::set_var("OPENAI_API_BASE", v), None => std::env::remove_var("OPENAI_API_BASE") }
         assert_eq!(total, 10, "exactly one request may pass the limiter: {codes:?}");
         assert!(limited >= 4, "{codes:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn put_rejects_a_provider_that_parses_but_is_not_enabled() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state().await;
+        let uid = mk_user(&st.db).await;
+        for enabled in [None, Some("openai")] {
+            let _enabled = match enabled {
+                Some(v) => EnvGuard::set("ENABLED_BYO_PROVIDERS", v),
+                None => EnvGuard::unset("ENABLED_BYO_PROVIDERS"),
+            };
+            let e = put_ai_provider(State(st.clone()), Extension(uid),
+                Json(PutAiProvider { provider: "anthropic".into(), api_key: "ak-x".into() })).await.unwrap_err();
+            assert_eq!(e.0, StatusCode::BAD_REQUEST, "{enabled:?}");
+            let view = get_ai_provider(State(st.clone()), Extension(uid)).await.unwrap().0;
+            assert!(!view.available_providers.contains(&"anthropic".to_string()), "{enabled:?}");
+        }
+        // Rejected before the rate limiter: no validation attempt is recorded.
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ai_key_validation_attempts WHERE user_id=$1")
+            .bind(uid).fetch_one(&st.db).await.unwrap();
+        assert_eq!(n, 0);
+    }
+
+    // A saved key keeps resolving after its provider is dropped from the list:
+    // the list gates new selections only.
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn saved_key_still_resolves_when_its_provider_is_not_enabled() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _enabled = EnvGuard::unset("ENABLED_BYO_PROVIDERS");
+        let st = state().await;
+        let uid = mk_user(&st.db).await;
+        sqlx::query("INSERT INTO user_ai_providers (user_id, provider, encrypted_key, key_last4, last_verified_at) VALUES ($1,'anthropic',$2,'wxyz',NOW())")
+            .bind(uid).bind(st.cipher.encrypt("ak-wxyz").unwrap()).execute(&st.db).await.unwrap();
+        let r = llm::resolve_for_user(&st.db, &st.cipher, uid).await.unwrap();
+        assert_eq!(r.creds().unwrap().provider, Provider::Anthropic);
+        assert_eq!(get_ai_provider(State(st.clone()), Extension(uid)).await.unwrap().0.mode, "byo");
     }
 
     #[tokio::test]

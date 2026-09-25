@@ -39,7 +39,7 @@
 {"id":"ignore-rule","message":"always ignore imported transactions from Venmo transfers","expect_action":"CREATE_IGNORE_RULE","expect_params":{}}
 {"id":"delete-account","message":"I want to delete my account","expect_action":"DELETE_ACCOUNT","expect_params":{}}
 {"id":"report-issue","message":"the insights chart won't load, please tell the developers","expect_action":"REPORT_ISSUE","expect_params":{}}
-{"id":"retirement-profile","message":"I live in the US, I was born 1985-06-15 and earn $120000 a year","expect_action":"SET_RETIREMENT_PROFILE","expect_params":{}}
+{"id":"retirement-profile","message":"I live in the US, I was born 1985-06-15 and earn $120000 a year","expect_action":"SET_RETIREMENT_PROFILE","expect_params":{"retirement_profile":{"country":"US","birth_date":"1985-06-15","current_gross_income":120000}}}
 {"id":"retirement-projection","message":"show my retirement projection","expect_action":"RETIREMENT_PROJECTION","expect_params":{}}
 {"id":"ambig-category-balance","message":"how much is left?","expect_action":"NONE","expect_params":{}}
 {"id":"ambig-no-claim-report","message":"this app is annoying","expect_action":"NONE","expect_params":{}}

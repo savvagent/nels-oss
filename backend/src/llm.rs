@@ -21,8 +21,6 @@ pub enum Provider {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 3] = [Provider::Gemini, Provider::OpenAi, Provider::Anthropic];
-
     pub fn as_str(self) -> &'static str {
         match self {
             Provider::Gemini => "gemini",
@@ -185,7 +183,12 @@ pub enum LlmError {
     Timeout,
     Transport,
     BadResponse,
+    /// A BYO row exists but is unusable (the key won't decrypt, or the stored
+    /// provider is unrecognized). The user must re-enter their key.
     KeyUnavailable,
+    /// The `user_ai_providers` lookup itself failed, so we can't tell whether
+    /// the user is BYO. Never falls back to Nels's key (spec A8).
+    ConfigUnavailable,
 }
 
 impl LlmError {
@@ -202,7 +205,11 @@ impl LlmError {
         match self {
             LlmError::Auth => "auth_rejected",
             LlmError::RateLimited => "rate_limited",
-            LlmError::Upstream(_) | LlmError::Timeout | LlmError::Transport | LlmError::BadResponse => "unavailable",
+            LlmError::Upstream(_)
+            | LlmError::Timeout
+            | LlmError::Transport
+            | LlmError::BadResponse
+            | LlmError::ConfigUnavailable => "unavailable",
             LlmError::KeyUnavailable => "key_unavailable",
         }
     }
@@ -626,14 +633,15 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Pure decision table (spec §5.1). `row` is the lookup result: `Err(())` means
-/// the SELECT failed, which must NEVER be treated as "no row" (spec A8).
+/// the SELECT failed, which must NEVER be treated as "no row" (spec A8); it is
+/// `ConfigUnavailable`. A row that exists but can't be used is `KeyUnavailable`.
 pub(crate) fn resolve_from(
     row: Result<Option<(String, String)>, ()>,
     cipher: &crate::crypto::SecretCipher,
     nels_key: &str,
 ) -> Result<Resolved, LlmError> {
     match row {
-        Err(()) => Err(LlmError::KeyUnavailable),
+        Err(()) => Err(LlmError::ConfigUnavailable),
         Ok(None) if nels_key.is_empty() => Ok(Resolved::Offline),
         Ok(None) => Ok(Resolved::Llm(LlmCredentials::new(
             Provider::Gemini,
@@ -670,6 +678,8 @@ pub async fn resolve_for_user(
             tracing::error!(%user_id, "ai provider lookup failed: {}", e);
         });
     let resolved = resolve_from(row, cipher, &nels_gemini_key());
+    // Only a broken BYO row is marked. A failed lookup (ConfigUnavailable)
+    // says nothing about the row, and the DB is likely down anyway.
     if matches!(resolved, Err(LlmError::KeyUnavailable)) {
         mark_key_unavailable(db, user_id).await;
     }
@@ -877,6 +887,7 @@ mod tests {
         assert_eq!(LlmError::from_status(500), LlmError::Upstream(500));
         assert_eq!(LlmError::Auth.code(), "auth_rejected");
         assert_eq!(LlmError::KeyUnavailable.code(), "key_unavailable");
+        assert_eq!(LlmError::ConfigUnavailable.code(), "unavailable");
     }
 
     #[tokio::test]
@@ -1177,8 +1188,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_from_lookup_error_is_key_unavailable() {
-        assert_eq!(resolve_from(Err(()), &cipher(), "nels-k").unwrap_err(), LlmError::KeyUnavailable);
+    fn resolve_from_lookup_error_is_config_unavailable_never_nels() {
+        for nels in ["", "nels-k"] {
+            assert_eq!(resolve_from(Err(()), &cipher(), nels).unwrap_err(), LlmError::ConfigUnavailable);
+        }
     }
 
     async fn test_pool() -> sqlx::PgPool {
