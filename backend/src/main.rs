@@ -19,6 +19,7 @@ mod passkeys;
 mod auth;
 mod admin;
 mod account;
+mod ai_provider;
 mod budget;
 mod goals;
 mod notifications;
@@ -321,6 +322,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Authenticated user's lifetime LLM token totals (#174). user_id is
         // derived from the auth Extension, never the client → /api/user/token-stats.
         .route("/user/token-stats", get(usage::token_stats))
+        // Per-user model provider / BYO key (nels-oss#3). User-scoped; the key is
+        // write-only from the client's point of view.
+        .route("/user/ai-provider", get(ai_provider::get_ai_provider)
+            .put(ai_provider::put_ai_provider)
+            .delete(ai_provider::delete_ai_provider))
 
         .route("/account/export", get(account::export_account))
         .route("/account/delete-challenge", post(account::delete_challenge))
