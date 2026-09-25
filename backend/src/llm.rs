@@ -312,7 +312,7 @@ async fn gemini_generate(
         return Err(map_status_error(Provider::Gemini, res).await);
     }
     let parsed: GemResponse = res.json().await.map_err(|e| {
-        tracing::error!("gemini response parse failed: {}", e.without_url());
+        tracing::error!(provider = "gemini", "llm response parse failed: {}", e.without_url());
         LlmError::BadResponse
     })?;
     let usage = GemUsage::to_usage(parsed.usage);
@@ -323,7 +323,10 @@ async fn gemini_generate(
         .and_then(|c| c.content)
         .and_then(|c| c.parts.into_iter().next())
         .and_then(|p| p.text)
-        .ok_or(LlmError::BadResponse)?;
+        .ok_or_else(|| {
+            tracing::error!(provider = "gemini", "llm response parse failed: no candidate text");
+            LlmError::BadResponse
+        })?;
     Ok(LlmOutput { text, usage })
 }
 
@@ -360,7 +363,7 @@ async fn gemini_embed(creds: &LlmCredentials, text: &str) -> Result<(Vec<f32>, T
         return Err(map_status_error(Provider::Gemini, res).await);
     }
     let parsed: GemEmbedResponse = res.json().await.map_err(|e| {
-        tracing::error!("gemini embed parse failed: {}", e.without_url());
+        tracing::error!(provider = "gemini", "llm response parse failed (embedding): {}", e.without_url());
         LlmError::BadResponse
     })?;
     Ok((parsed.embedding.values, GemUsage::to_usage(parsed.usage)))
@@ -416,7 +419,7 @@ async fn openai_chat(
         return Err(map_status_error(Provider::OpenAi, res).await);
     }
     let parsed: OaResponse = res.json().await.map_err(|e| {
-        tracing::error!("openai response parse failed: {}", e.without_url());
+        tracing::error!(provider = "openai", "llm response parse failed: {}", e.without_url());
         LlmError::BadResponse
     })?;
     let usage = parsed
@@ -433,7 +436,10 @@ async fn openai_chat(
         .into_iter()
         .next()
         .and_then(|c| c.message.content)
-        .ok_or(LlmError::BadResponse)?;
+        .ok_or_else(|| {
+            tracing::error!(provider = "openai", "llm response parse failed: no message content");
+            LlmError::BadResponse
+        })?;
     Ok(LlmOutput { text, usage })
 }
 
@@ -478,7 +484,7 @@ async fn anthropic_messages(
         return Err(map_status_error(Provider::Anthropic, res).await);
     }
     res.json().await.map_err(|e| {
-        tracing::error!("anthropic response parse failed: {}", e.without_url());
+        tracing::error!(provider = "anthropic", "llm response parse failed: {}", e.without_url());
         LlmError::BadResponse
     })
 }
@@ -512,8 +518,14 @@ async fn anthropic_json(creds: &LlmCredentials, system: &str, user: &str, timeou
         .find(|b| b.kind == "tool_use" && b.name.as_deref() == Some("respond"))
         .and_then(|b| b.input)
         .filter(|v| v.is_object())
-        .ok_or(LlmError::BadResponse)?;
-    let text = serde_json::to_string(&input).map_err(|_| LlmError::BadResponse)?;
+        .ok_or_else(|| {
+            tracing::error!(provider = "anthropic", "llm response parse failed: no respond tool_use block");
+            LlmError::BadResponse
+        })?;
+    let text = serde_json::to_string(&input).map_err(|e| {
+        tracing::error!(provider = "anthropic", "llm response parse failed: tool input not serializable: {}", e);
+        LlmError::BadResponse
+    })?;
     Ok(LlmOutput { text, usage })
 }
 
@@ -532,6 +544,7 @@ async fn anthropic_text(creds: &LlmCredentials, prompt: &str, timeout: Duration)
         .filter_map(|b| b.text)
         .collect();
     if text.is_empty() {
+        tracing::error!(provider = "anthropic", "llm response parse failed: no text block");
         return Err(LlmError::BadResponse);
     }
     Ok(LlmOutput { text, usage })

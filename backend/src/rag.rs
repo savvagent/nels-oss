@@ -6,7 +6,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
-use std::env;
 use chrono::{DateTime, Utc};
 
 use crate::auth::AppState;
@@ -203,6 +202,11 @@ pub struct ChatResponse {
     /// "System Update".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retirement_projection: Option<crate::retirement_projection::Projection>,
+    /// nels-oss#3: set when a BYO-key model call failed (or the stored key is
+    /// unreadable); an `LlmError::code()` string. The frontend offers an
+    /// "Open AI settings" action. Never set for Nels-hosted failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_provider_error: Option<String>,
 }
 
 /// A category choice offered when the assistant would auto-create a brand-new
@@ -365,6 +369,33 @@ pub(crate) struct AiStructuredResponse {
     action: String, // "NONE", "CREATE_BUDGET", "UPDATE_BUDGET" (limit/rollover/auto-renew/rename), "CLOSE_BUDGET", "ARCHIVE_BUDGET", "UNARCHIVE_BUDGET", "CREATE_CATEGORY", "UPDATE_CATEGORY" (rename), "ADD_TRANSACTION", "EDIT_TRANSACTION", "SHARE_BUDGET", "SET_CATEGORY_FUND"
     action_params: Option<AiActionParams>,
     response_text: String,
+}
+
+/// The chat reply for a failed model call. The Nels-hosted copy is unchanged
+/// from before nels-oss#3; BYO copy names the provider and points at Settings
+/// (spec §6). Never falls back to another provider (spec A8).
+fn llm_error_reply(err: crate::llm::LlmError, creds: Option<&crate::llm::LlmCredentials>) -> AiStructuredResponse {
+    use crate::llm::{KeySource, LlmError};
+    let byo = creds.filter(|c| c.source == KeySource::Byo).map(|c| c.provider.display_name());
+    let response_text = match (err, byo) {
+        (LlmError::KeyUnavailable, _) => "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.".to_string(),
+        (LlmError::Auth, Some(p)) => format!("Your {p} key was rejected. Check or replace it in Settings → AI provider."),
+        (LlmError::RateLimited, Some(p)) => format!("{p} says your key is out of quota or rate-limited. Try again later, or check your {p} account."),
+        (LlmError::Timeout | LlmError::Transport, Some(p)) => format!("I couldn't reach {p}. Please try again in a moment."),
+        (LlmError::Upstream(s), Some(p)) => format!("{p} returned an error (status {s}). Please try again in a moment."),
+        (LlmError::BadResponse, Some(p)) => format!("{p} returned a response I couldn't read. Please try again."),
+        (LlmError::Timeout | LlmError::Transport, None) => "My communications link is down. Please verify internet connectivity.".to_string(),
+        (LlmError::Upstream(s), None) => format!("I hit a problem reaching my reasoning engine (status {s}). Please try again in a moment."),
+        (LlmError::Auth, None) => "I hit a problem reaching my reasoning engine (status 401). Please try again in a moment.".to_string(),
+        (LlmError::RateLimited, None) => "I hit a problem reaching my reasoning engine (status 429). Please try again in a moment.".to_string(),
+        (LlmError::BadResponse, None) => "My neural network returned a response that couldn't be indexed correctly.".to_string(),
+    };
+    AiStructuredResponse {
+        thought: format!("llm error: {}", err.code()),
+        action: "NONE".to_string(),
+        action_params: None,
+        response_text,
+    }
 }
 
 /// Fallback used when the model's chat JSON cannot be deserialized (#385).
@@ -535,12 +566,11 @@ async fn record_llm_usage(
 ///
 /// `pub(crate)` (widened by #283) so `reports.rs`'s `gemini_narrative` can thread its URL
 /// construction through the same seam — see AGENTS.md §2.
+///
+/// nels-oss#3: now a thin delegate to `llm::Provider::Gemini.api_base()`, the single
+/// owner of the base-URL rule, kept so existing call sites and tests compile.
 pub(crate) fn gemini_api_base() -> String {
-    std::env::var("GEMINI_API_BASE")
-        .ok()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string())
+    crate::llm::Provider::Gemini.api_base()
 }
 
 // Helper: Call Gemini gemini-embedding-001 (768-dim to match the chat_messages.embedding column)
@@ -1715,13 +1745,14 @@ pub async fn chat_endpoint(
     }
 
     // 4. pgvector Semantic Search over past conversations
-    let api_key = env::var("GEMINI_API_KEY").unwrap_or_default();
+    // nels-oss#3: resolve ONCE for this turn; every model/embedding call below
+    // uses this. Err never falls back to Nels's key (spec A8); embeddings under
+    // Err or a non-Gemini provider are simply None.
+    let ai_res = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id).await;
+    let ai = ai_res.clone().unwrap_or(crate::llm::Resolved::Offline);
+    let mut ai_provider_error: Option<String> = None;
     let mut semantic_context = String::new();
-    let query_vector_opt = if !api_key.is_empty() {
-        get_gemini_embedding(&payload.message, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let query_vector_opt = crate::llm::embed_for(&state.db, user_id, &ai, &payload.message).await;
 
     if let (Some(v), Some(bid)) = (&query_vector_opt, active_budget_id) {
         let vec_str = vector_to_string(v);
@@ -1808,122 +1839,47 @@ pub async fn chat_endpoint(
     // which would otherwise pair it with the canned/LLM-generated "I'll create it!" text
     // AND a ⚠️ warning marker -- a confusing, self-contradicting reply for something that
     // isn't a failure at all.
-    let mut parsed_ai_res: AiStructuredResponse = if !api_key.is_empty() {
-        // CALL GEMINI VIA REQWEST
-        // Bound the main chat generateContent call: this occupies the request/connection for
-        // the synchronous /chat handler, so a stalled Gemini connection must not hang the
-        // request indefinitely. 30s is sized to fail well before an unbounded hang, not to
-        // guarantee beating the frontend's 45s-default fetchApi timeout (#248) — the /chat
-        // handler awaits other sequential Gemini calls too (an embedding lookup, and on the
-        // first exchange, title generation), so total handler latency can still exceed 45s.
-        // The 30s bound just ensures a stalled connection here surfaces as this function's
-        // existing "communications link is down" fallback response rather than hanging forever.
-        // See #249.
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!(
-            "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-            gemini_api_base(), api_key
-        );
-
-        let req_payload = GeminiChatRequest {
-            contents: vec![
-                GeminiChatContent {
-                    parts: vec![
-                        GeminiChatPart { text: system_instructions },
-                        GeminiChatPart { text: format!("USER MESSAGE: {}", payload.message) }
-                    ]
-                }
-            ],
-            generation_config: GeminiGenerationConfig {
-                response_mime_type: "application/json".to_string(),
-            }
-        };
-
-        let res = client.post(&url)
-            .json(&req_payload)
-            .send()
-            .await;
-
-        match res {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let chat_res = response.json::<GeminiChatResponse>().await;
-                    match chat_res {
-                        Ok(gem_res) => {
-                            let usage = gem_res.usage_metadata.as_ref();
-                            record_llm_usage(
-                                &state.db,
-                                user_id,
-                                "models/gemini-2.5-flash",
-                                "chat",
-                                usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-                                usage.and_then(|u| u.total_token_count).unwrap_or(0),
-                            )
-                            .await;
-                            if let Some(candidate) = gem_res.candidates.first() {
-                                if let Some(part) = candidate.content.parts.first() {
-                                    let clean_text = part.text.trim();
-                                    // Parse structured JSON
-                                    match serde_json::from_str::<AiStructuredResponse>(clean_text) {
-                                        Ok(parsed) => parsed,
-                                        Err(e) => {
-                                            tracing::error!("Failed to parse Gemini JSON output: {}. Raw: {}", e, clean_text);
-                                            malformed_response_fallback(clean_text)
-                                        }
-                                    }
-                                } else {
-                                    AiStructuredResponse {
-                                        thought: "Empty response parts".to_string(),
-                                        action: "NONE".to_string(),
-                                        action_params: None,
-                                        response_text: "I received an empty reply from my engine.".to_string(),
-                                    }
-                                }
-                            } else {
-                                AiStructuredResponse {
-                                    thought: "No candidates returned".to_string(),
-                                    action: "NONE".to_string(),
-                                    action_params: None,
-                                    response_text: "I'm sorry, I was unable to compile a thought candidate.".to_string(),
-                                }
-                            }
-                        }
+    let mut parsed_ai_res: AiStructuredResponse = match &ai_res {
+        Err(e) => {
+            ai_provider_error = Some(e.code().to_string());
+            llm_error_reply(*e, None)
+        }
+        Ok(crate::llm::Resolved::Llm(creds)) => {
+            // Bound the main chat call: this occupies the request/connection for the
+            // synchronous /chat handler, so a stalled provider connection must not hang the
+            // request indefinitely. 30s is sized to fail well before an unbounded hang, not
+            // to guarantee beating the frontend's 45s-default fetchApi timeout (#248). The
+            // bound is now enforced inside llm.rs. See #249.
+            match crate::llm::generate_json_for(
+                &state.db,
+                user_id,
+                creds,
+                "chat",
+                &system_instructions,
+                &format!("USER MESSAGE: {}", payload.message),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            {
+                Ok(text) => {
+                    let clean_text = text.trim();
+                    match serde_json::from_str::<AiStructuredResponse>(clean_text) {
+                        Ok(parsed) => parsed,
                         Err(e) => {
-                            tracing::error!("Gemini json parse error: {}", e);
-                            AiStructuredResponse {
-                                thought: "Gemini JSON structure changed".to_string(),
-                                action: "NONE".to_string(),
-                                action_params: None,
-                                response_text: "My neural network returned a response that couldn't be indexed correctly.".to_string(),
-                            }
+                            tracing::error!("Failed to parse model JSON output: {}. Raw: {}", e, clean_text);
+                            malformed_response_fallback(clean_text)
                         }
                     }
-                } else {
-                    tracing::error!("Gemini API error. Status: {:?}", response.status());
-                    AiStructuredResponse {
-                        thought: "Gemini API failed".to_string(),
-                        action: "NONE".to_string(),
-                        action_params: None,
-                        response_text: format!("I hit a problem reaching my reasoning engine (status {:?}). Please try again in a moment.", response.status()),
-                    }
                 }
-            }
-            Err(e) => {
-                tracing::error!("Error posting to Gemini API: {}", e);
-                AiStructuredResponse {
-                    thought: "HTTP failure".to_string(),
-                    action: "NONE".to_string(),
-                    action_params: None,
-                    response_text: "My communications link is down. Please verify internet connectivity.".to_string(),
+                Err(e) => {
+                    if creds.source == crate::llm::KeySource::Byo {
+                        ai_provider_error = Some(e.code().to_string());
+                    }
+                    llm_error_reply(e, Some(creds))
                 }
             }
         }
-    } else {
+        Ok(crate::llm::Resolved::Offline) => {
         // GEMINI API KEY IS NOT SET - RUN INTUITIVE OFFLINE MOCK NLP PARSER FOR DEMO
         let msg_lower = payload.message.to_lowercase();
         let mut action = "NONE".to_string();
@@ -2370,6 +2326,7 @@ pub async fn chat_endpoint(
             action,
             action_params: Some(action_params),
             response_text,
+        }
         }
     };
 
@@ -4603,17 +4560,17 @@ pub async fn chat_endpoint(
             }
         }
         "EDIT_TRANSACTION" => {
-            let (ml, me) = chat_edit_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (ml, me) = chat_edit_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             mutation_log = ml;
             mutation_error = me;
         }
         "DELETE_TRANSACTION" => {
-            let (pd, me) = chat_delete_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (pd, me) = chat_delete_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             pending_deletion = pd;
             mutation_error = me;
         }
         "EXCLUDE_TRANSACTION" => {
-            let (ml, me) = chat_exclude_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref()).await;
+            let (ml, me) = chat_exclude_transaction(&state, user_id, active_budget_id, parsed_ai_res.action_params.as_ref(), &ai).await;
             mutation_log = ml;
             mutation_error = me;
         }
@@ -4690,11 +4647,7 @@ pub async fn chat_endpoint(
     .await;
 
     let ai_msg_id = Uuid::new_v4();
-    let ai_vector_opt = if !api_key.is_empty() {
-        get_gemini_embedding(&final_response_text, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let ai_vector_opt = crate::llm::embed_for(&state.db, user_id, &ai, &final_response_text).await;
     let ai_v_str = ai_vector_opt.map(|v| vector_to_string(&v));
 
     let _ = sqlx::query(
@@ -4732,12 +4685,11 @@ pub async fn chat_endpoint(
         None => false,
     };
     if needs_title {
-        let title = if !api_key.is_empty() {
-            generate_conversation_title(&payload.message, &final_response_text, &api_key, &state.db, user_id)
+        let title = match ai.creds() {
+            Some(c) => generate_conversation_title(&payload.message, &final_response_text, c, &state.db, user_id)
                 .await
-                .unwrap_or_else(|| fallback_title(&payload.message))
-        } else {
-            fallback_title(&payload.message)
+                .unwrap_or_else(|| fallback_title(&payload.message)),
+            None => fallback_title(&payload.message),
         };
         let _ = sqlx::query("UPDATE conversations SET title = $1 WHERE id = $2")
             .bind(&title)
@@ -4766,6 +4718,7 @@ pub async fn chat_endpoint(
         open_transactions_list,
         open_retirement,
         retirement_projection,
+        ai_provider_error,
     }))
 }
 
@@ -6005,24 +5958,20 @@ struct ResolvedTransaction {
 /// DELETE_TRANSACTION (#258) so the matching algorithm and ambiguity guard
 /// (EDIT_TRANSACTION_MAX_DISTANCE) can never drift between the two actions.
 /// Returns `Err(user_facing_message)` on an empty locator, a missing/failed
-/// embedding (e.g. no GEMINI_API_KEY), no match, or a match beyond the
+/// embedding (e.g. offline, or a provider that can't embed), no match, or a match beyond the
 /// distance cutoff.
 async fn resolve_transaction_by_locator(
     state: &AppState,
     user_id: Uuid,
     bid: Uuid,
     locator: &str,
+    ai: &crate::llm::Resolved,
 ) -> Result<ResolvedTransaction, String> {
     if locator.trim().is_empty() {
         return Err("Tell me which transaction you mean.".to_string());
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let loc_embedding = if !api_key.is_empty() {
-        get_gemini_embedding(locator, &api_key, &state.db, user_id).await
-    } else {
-        None
-    };
+    let loc_embedding = crate::llm::embed_for(&state.db, user_id, ai, locator).await;
     let v = match loc_embedding {
         Some(v) => v,
         None => return Err("I couldn't look up that transaction right now.".to_string()),
@@ -6090,6 +6039,7 @@ async fn chat_edit_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<String>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6112,8 +6062,7 @@ async fn chat_edit_transaction(
         return (None, Some("What would you like to change about that transaction?".to_string()));
     }
 
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
-    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(r) => r,
         Err(msg) => return (None, Some(msg)),
     };
@@ -6163,8 +6112,8 @@ async fn chat_edit_transaction(
         );
     }
 
-    let tx_embedding = if description_changed && !api_key.is_empty() {
-        get_gemini_embedding(&new_desc, &api_key, &state.db, user_id).await
+    let tx_embedding = if description_changed {
+        crate::llm::embed_for(&state.db, user_id, ai, &new_desc).await
     } else {
         None
     };
@@ -6219,6 +6168,7 @@ async fn chat_exclude_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<String>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6236,7 +6186,7 @@ async fn chat_exclude_transaction(
         return (None, Some("Tell me which transaction — e.g. \"ignore that Visa payment\".".to_string()));
     }
     let excluded = params.excluded.unwrap_or(true);
-    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    let resolved = match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(r) => r,
         Err(msg) => return (None, Some(msg)),
     };
@@ -6315,6 +6265,7 @@ async fn chat_delete_transaction(
     user_id: Uuid,
     active_budget_id: Option<Uuid>,
     params: Option<&AiActionParams>,
+    ai: &crate::llm::Resolved,
 ) -> (Option<PendingDeletion>, Option<String>) {
     let bid = match active_budget_id {
         Some(b) => b,
@@ -6327,7 +6278,7 @@ async fn chat_delete_transaction(
         return (None, Some("Tell me which transaction to delete — e.g. \"delete my $5 coffee transaction\".".to_string()));
     }
 
-    match resolve_transaction_by_locator(state, user_id, bid, &locator).await {
+    match resolve_transaction_by_locator(state, user_id, bid, &locator, ai).await {
         Ok(resolved) => (
             Some(PendingDeletion {
                 kind: "transaction".to_string(),
@@ -7824,90 +7775,33 @@ fn fallback_title(first_user_msg: &str) -> String {
     }
 }
 
-// Helper: ask Gemini for a short (3-6 word) conversation title summarizing the
-// first exchange. Mirrors the chat-call pattern; returns the trimmed first line.
+// Helper: ask the user's model for a short (3-6 word) conversation title
+// summarizing the first exchange; returns the trimmed first line. Routed through
+// llm.rs (nels-oss#3), which also records usage and logs every failure (#297).
 async fn generate_conversation_title(
     first_user_msg: &str,
     first_ai_msg: &str,
-    api_key: &str,
+    creds: &crate::llm::LlmCredentials,
     pool: &sqlx::PgPool,
     user_id: uuid::Uuid,
 ) -> Option<String> {
-    // Bound the title-generation call: it's awaited inline in the /chat handler (after the
-    // reply is prepared, but still before the HTTP response returns), so a stalled connection
-    // must not hang the request. 20s matches get_gemini_embedding's existing precedent — this
-    // call returns one short line and already degrades gracefully to fallback_title() on any
-    // failure. See #249.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        gemini_api_base(), api_key
-    );
-
     let prompt = format!(
         "Generate a concise 3-6 word title (no quotes, no trailing punctuation) \
          summarizing this conversation. Reply with ONLY the title.\n\n\
          USER: {}\nASSISTANT: {}",
         first_user_msg, first_ai_msg
     );
-
-    let req_payload = GeminiChatRequest {
-        contents: vec![GeminiChatContent {
-            parts: vec![GeminiChatPart { text: prompt }],
-        }],
-        generation_config: GeminiGenerationConfig {
-            response_mime_type: "text/plain".to_string(),
-        },
-    };
-
-    let res = client
-        .post(&url)
-        .json(&req_payload)
-        .send()
+    // Bound the title-generation call: it's awaited inline in the /chat handler (after the
+    // reply is prepared, but still before the HTTP response returns), so a stalled connection
+    // must not hang the request. It returns one short line and already degrades gracefully to
+    // fallback_title() on any failure. See #249.
+    let raw = crate::llm::generate_text_for(pool, user_id, creds, "title", &prompt, std::time::Duration::from_secs(20))
         .await
-        .inspect_err(|e| tracing::error!("Error posting to Gemini API (title generation): {}", e))
         .ok()?;
-    if !res.status().is_success() {
-        tracing::error!("Title generation failed with status: {:?}", res.status());
-        return None;
-    }
-    let parsed = match res.json::<GeminiChatResponse>().await {
-        Ok(p) => p,
-        Err(e) => {
-            // #297: log rather than silently discard a malformed/unexpected 2xx body,
-            // mirroring reports.rs::gemini_narrative's #294 fix and this function's own
-            // non-2xx/request-error arms above (both already log).
-            tracing::error!("Title generation response parse failed: {}", e);
-            return None;
-        }
-    };
-    let usage = parsed.usage_metadata.as_ref();
-    record_llm_usage(
-        pool,
-        user_id,
-        "models/gemini-2.5-flash",
-        "title",
-        usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-        usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-        usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-        usage.and_then(|u| u.total_token_count).unwrap_or(0),
-    )
-    .await;
-    let raw = parsed.candidates.first()?.content.parts.first()?.text.clone();
-    let title = raw
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches(['"', '\'', '.'])
-        .to_string();
+    let title = raw.lines().next().unwrap_or("").trim().trim_matches(['"', '\'', '.']).to_string();
     if title.is_empty() {
         None
     } else {
-        // Guard against a runaway model response.
         Some(title.chars().take(80).collect())
     }
 }
@@ -8084,7 +7978,9 @@ pub async fn suggested_question(
     Extension(user_id): Extension<Uuid>,
     Query(params): Query<SuggestedQuestionQuery>,
 ) -> Result<Json<SuggestedQuestionResponse>, (StatusCode, String)> {
-    let api_key = env::var("GEMINI_API_KEY").unwrap_or_default();
+    let ai = crate::llm::resolve_for_user(&state.db, &state.cipher, user_id)
+        .await
+        .unwrap_or(crate::llm::Resolved::Offline);
 
     // Recent cross-thread context, ownership-scoped by user_id.
     let rows = sqlx::query(
@@ -8096,11 +7992,16 @@ pub async fn suggested_question(
     .await
     .map_err(internal_error)?;
 
-    if rows.is_empty() || api_key.is_empty() {
-        return Ok(Json(SuggestedQuestionResponse {
-            question: DEFAULT_SUGGESTED_QUESTION.to_string(),
-        }));
-    }
+    // Offline, or a key that couldn't be resolved: the canned default, never the
+    // Nels key as a fallback for a BYO user (spec A8).
+    let creds = match ai.creds() {
+        Some(c) if !rows.is_empty() => c,
+        _ => {
+            return Ok(Json(SuggestedQuestionResponse {
+                question: DEFAULT_SUGGESTED_QUESTION.to_string(),
+            }));
+        }
+    };
 
     let mut context = String::new();
     for r in rows.iter().rev() {
@@ -8109,34 +8010,23 @@ pub async fn suggested_question(
         context.push('\n');
     }
 
-    let question = generate_suggested_question(&context, &api_key, language_name(params.locale.as_deref()), &state.db, user_id)
+    let question = generate_suggested_question(&context, creds, language_name(params.locale.as_deref()), &state.db, user_id)
         .await
         .unwrap_or_else(|| DEFAULT_SUGGESTED_QUESTION.to_string());
 
     Ok(Json(SuggestedQuestionResponse { question }))
 }
 
-// Helper: ask Gemini for one short, relevant follow-up question the user might
-// ask Nels next, given their recent conversation context.
+// Helper: ask the user's model for one short, relevant follow-up question the
+// user might ask Nels next, given their recent conversation context. Routed
+// through llm.rs (nels-oss#3), which records usage and logs every failure (#297).
 async fn generate_suggested_question(
     context: &str,
-    api_key: &str,
+    creds: &crate::llm::LlmCredentials,
     lang: Option<&'static str>,
     pool: &sqlx::PgPool,
     user_id: uuid::Uuid,
 ) -> Option<String> {
-    // Bound the suggested-question call: same reasoning as generate_conversation_title — a
-    // short, single-line, already-optional output (falls back to DEFAULT_SUGGESTED_QUESTION on
-    // any failure), 20s matches get_gemini_embedding's existing precedent. See #249.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-    let url = format!(
-        "{}/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        gemini_api_base(), api_key
-    );
-
     let prompt = format!(
         "You are Nels, a personal budgeting assistant. Based on the user's recent \
          conversation history below, suggest ONE short, natural follow-up question \
@@ -8151,51 +8041,19 @@ async fn generate_suggested_question(
         None => prompt,
     };
 
-    let req_payload = GeminiChatRequest {
-        contents: vec![GeminiChatContent {
-            parts: vec![GeminiChatPart { text: prompt }],
-        }],
-        generation_config: GeminiGenerationConfig {
-            response_mime_type: "text/plain".to_string(),
-        },
-    };
-
-    let res = client
-        .post(&url)
-        .json(&req_payload)
-        .send()
-        .await
-        .inspect_err(|e| {
-            tracing::error!("Error posting to Gemini API (suggested-question generation): {}", e)
-        })
-        .ok()?;
-    if !res.status().is_success() {
-        tracing::error!("Suggested-question generation failed: {:?}", res.status());
-        return None;
-    }
-    let parsed = match res.json::<GeminiChatResponse>().await {
-        Ok(p) => p,
-        Err(e) => {
-            // #297: log rather than silently discard a malformed/unexpected 2xx body,
-            // mirroring reports.rs::gemini_narrative's #294 fix and this function's own
-            // non-2xx/request-error arms above (both already log).
-            tracing::error!("Suggested-question response parse failed: {}", e);
-            return None;
-        }
-    };
-    let usage = parsed.usage_metadata.as_ref();
-    record_llm_usage(
+    // Bound the suggested-question call: same reasoning as generate_conversation_title — a
+    // short, single-line, already-optional output (falls back to DEFAULT_SUGGESTED_QUESTION on
+    // any failure). See #249.
+    let raw = crate::llm::generate_text_for(
         pool,
         user_id,
-        "models/gemini-2.5-flash",
+        creds,
         "suggested_questions",
-        usage.and_then(|u| u.prompt_token_count).unwrap_or(0),
-        usage.and_then(|u| u.candidates_token_count).unwrap_or(0),
-        usage.and_then(|u| u.thoughts_token_count).unwrap_or(0),
-        usage.and_then(|u| u.total_token_count).unwrap_or(0),
+        &prompt,
+        std::time::Duration::from_secs(20),
     )
-    .await;
-    let raw = parsed.candidates.first()?.content.parts.first()?.text.clone();
+    .await
+    .ok()?;
     let q = raw
         .lines()
         .next()
@@ -8355,12 +8213,29 @@ mod tests {
         );
     }
 
+    // nels-oss#3: the Nels-hosted copy is byte-for-byte what users saw before; BYO copy
+    // names the provider and points at Settings.
+    #[test]
+    fn llm_error_reply_names_byo_provider_and_keeps_nels_copy() {
+        let byo = crate::llm::LlmCredentials::new(crate::llm::Provider::OpenAi, "k".into(), crate::llm::KeySource::Byo);
+        let nels = crate::llm::LlmCredentials::new(crate::llm::Provider::Gemini, "k".into(), crate::llm::KeySource::Nels);
+        let r = llm_error_reply(crate::llm::LlmError::Auth, Some(&byo));
+        assert!(r.response_text.contains("OpenAI") && r.response_text.contains("Settings"));
+        let r = llm_error_reply(crate::llm::LlmError::Transport, Some(&nels));
+        assert_eq!(r.response_text, "My communications link is down. Please verify internet connectivity.");
+        let r = llm_error_reply(crate::llm::LlmError::Upstream(503), Some(&nels));
+        assert_eq!(r.response_text, "I hit a problem reaching my reasoning engine (status 503). Please try again in a moment.");
+        let r = llm_error_reply(crate::llm::LlmError::KeyUnavailable, None);
+        assert!(r.response_text.contains("re-enter"));
+        assert_eq!(r.action, "NONE");
+    }
+
     // #269: proves generate_conversation_title's #249 timeout (20s) actually fires end-to-end —
     // not just that a Duration was passed to Client::builder(). A local mock Gemini endpoint
     // (via GEMINI_API_BASE) sleeps past the configured timeout before responding; the call must
     // return None (its caller's existing fallback is fallback_title) well before the mock ever
-    // answers. A lazy pool is safe here: record_llm_usage is only reached on the success path,
-    // which this test never takes.
+    // answers. A lazy pool is safe here: llm.rs records usage only on the success path, which
+    // this test never takes, and `observe` writes nothing for a Nels-sourced key.
     #[tokio::test]
     async fn generate_conversation_title_falls_back_to_fallback_title_on_timeout() {
         let _env = GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -8385,12 +8260,17 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let started = std::time::Instant::now();
         let result = generate_conversation_title(
             "how much did I spend on food",
             "You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             &pool,
             uuid::Uuid::new_v4(),
         )
@@ -8436,11 +8316,16 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let started = std::time::Instant::now();
         let result = generate_suggested_question(
             "user: how much did I spend on food\nassistant: You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             None,
             &pool,
             uuid::Uuid::new_v4(),
@@ -8513,8 +8398,8 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let mock_handle = tokio::spawn(async move {
-            // 2xx with a body missing the required `candidates` field — a well-formed
-            // JSON object that still fails to deserialize into GeminiChatResponse.
+            // 2xx with a body carrying no candidate text — a well-formed JSON object that
+            // llm.rs's Gemini adapter maps to BadResponse (and, #297, logs).
             let mock = axum::Router::new().fallback(|| async { axum::Json(serde_json::json!({})) });
             if let Err(e) = axum::serve(listener, mock).await {
                 eprintln!("mock Gemini server error: {e}");
@@ -8526,11 +8411,16 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let result = generate_conversation_title(
             "how much did I spend on food",
             "You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             &pool,
             uuid::Uuid::new_v4(),
         )
@@ -8538,7 +8428,7 @@ mod tests {
 
         assert!(result.is_none(), "a malformed 2xx body must yield None, triggering fallback_title");
         assert!(
-            captured.has_error_containing("Title generation response parse failed"),
+            captured.has_error_containing("llm response parse failed"),
             "a malformed 2xx Gemini body must be logged via tracing::error!, not silently swallowed"
         );
         mock_handle.abort();
@@ -8568,10 +8458,15 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .expect("lazy pool");
+        let creds = crate::llm::LlmCredentials::new(
+            crate::llm::Provider::Gemini,
+            "dummy".into(),
+            crate::llm::KeySource::Nels,
+        );
 
         let result = generate_suggested_question(
             "user: how much did I spend on food\nassistant: You spent $120 on Food this month.",
-            "dummy-test-key",
+            &creds,
             None,
             &pool,
             uuid::Uuid::new_v4(),
@@ -8580,7 +8475,7 @@ mod tests {
 
         assert!(result.is_none(), "a malformed 2xx body must yield None, triggering DEFAULT_SUGGESTED_QUESTION");
         assert!(
-            captured.has_error_containing("Suggested-question response parse failed"),
+            captured.has_error_containing("llm response parse failed"),
             "a malformed 2xx Gemini body must be logged via tracing::error!, not silently swallowed"
         );
         mock_handle.abort();
@@ -19173,7 +19068,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("visa payment".to_string());
         p.excluded = Some(true);
-        let (log, err) = super::chat_exclude_transaction(&state, uuid::Uuid::new_v4(), None, Some(&p)).await;
+        let (log, err) = super::chat_exclude_transaction(&state, uuid::Uuid::new_v4(), None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
     }
 
@@ -19302,7 +19197,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, None, Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19310,14 +19205,14 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("   ".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "empty locator must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
         // 3. Locator set, but no new values to apply.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no new values must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19326,7 +19221,7 @@ mod tests {
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
         p.amount = Some(7.0);
-        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (log, err) = chat_edit_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(log.is_none() && err.is_some(), "no embedding key must refuse: {err:?}");
         assert_unchanged(&pool, tx_id).await;
 
@@ -19399,27 +19294,27 @@ mod tests {
         // 1. No active budget.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, None, Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, None, Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "no active budget must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 2. Empty locator.
         let mut p = blank_action_params();
         p.transaction_match = Some("   ".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "empty locator must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 3. No locator at all (None params field).
         let p = blank_action_params();
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "missing locator must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
         // 4. Locator set, but no GEMINI_API_KEY locally -> can't resolve the target.
         let mut p = blank_action_params();
         p.transaction_match = Some("coffee".to_string());
-        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p)).await;
+        let (pd, err) = chat_delete_transaction(&state, owner_id, Some(budget_id), Some(&p), &crate::llm::Resolved::Offline).await;
         assert!(pd.is_none() && err.is_some(), "no embedding key must refuse: {err:?}");
         assert_row_intact(&pool, tx_id).await;
 
