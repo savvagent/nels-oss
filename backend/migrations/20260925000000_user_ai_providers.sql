@@ -15,15 +15,15 @@ ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'g
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS key_source TEXT NOT NULL DEFAULT 'nels';
 -- llm_usage is the highest-write table and migrations run automatically during
 -- rolling restarts. A plain ADD CONSTRAINT ... CHECK holds ACCESS EXCLUSIVE while
--- it scans every row, blocking all usage writes. NOT VALID adds the constraint
--- (enforced for new rows) without the scan; VALIDATE then checks existing rows
--- under only a SHARE UPDATE EXCLUSIVE lock, which does not block inserts.
+-- it scans every row, blocking all usage writes. NOT VALID adds the constraints
+-- (enforced for new rows) without the scan. The VALIDATE step lives in the next
+-- migration (20260925000100): sqlx wraps each migration in its own transaction,
+-- so a VALIDATE in this file would still run under this file's ACCESS EXCLUSIVE
+-- lock.
 ALTER TABLE llm_usage ADD CONSTRAINT llm_usage_key_source_check
   CHECK (key_source IN ('nels','byo')) NOT VALID;
-ALTER TABLE llm_usage VALIDATE CONSTRAINT llm_usage_key_source_check;
 ALTER TABLE llm_usage ADD CONSTRAINT llm_usage_provider_check
   CHECK (provider IN ('gemini','openai','anthropic')) NOT VALID;
-ALTER TABLE llm_usage VALIDATE CONSTRAINT llm_usage_provider_check;
 
 -- Rolling-window limiter for PUT /api/user/ai-provider (10 per hour).
 CREATE TABLE IF NOT EXISTS ai_key_validation_attempts (
