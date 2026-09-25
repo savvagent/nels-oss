@@ -4,6 +4,9 @@ export const SITE = {
   url: 'https://nels.money',
   appUrl: 'https://app.nels.money',
   supportEmail: 'support@nels.money',
+  // Public AGPL-3.0 source. AGPL §13 requires offering network users the source,
+  // so the footer links here from every page.
+  sourceUrl: 'https://github.com/savvagent/nels-oss',
   description:
     'Chat your way to financial clarity. Manage budgets, track expenses, and share with family — all with passwordless sign-in.',
   trialDays: 7,

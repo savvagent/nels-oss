@@ -180,4 +180,4 @@ Nels is free software, licensed under the [GNU Affero General Public License v3.
 
 The license covers the code. It does not grant rights to the "Nels" name or logo.
 
-To report a security issue, see [SECURITY.md](SECURITY.md).
+To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md); contributors sign a [Contributor License Agreement](CLA.md). To report a security issue, see [SECURITY.md](SECURITY.md).
