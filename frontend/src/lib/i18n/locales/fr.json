@@ -630,7 +630,7 @@
     "termsLink": "Lire les conditions d'utilisation des données de l'API {provider}",
     "chatErrorRejected": "Votre clé d'IA a été refusée.",
     "chatErrorQuota": "Votre clé d'IA a épuisé son quota ou est limitée en débit.",
-    "chatErrorUnreadable": "Vos paramètres d'IA n'ont pas pu être chargés.",
+    "chatErrorUnreadable": "Votre clé d'IA enregistrée n'a pas pu être lue.",
     "chatErrorUnavailable": "Impossible de joindre votre fournisseur d'IA.",
     "openSettings": "Ouvrir les réglages IA",
     "saveError": "Impossible d'enregistrer la clé : {message}",

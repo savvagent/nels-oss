@@ -630,7 +630,7 @@
     "termsLink": "Ler os termos de dados da API de {provider}",
     "chatErrorRejected": "A sua chave de IA foi rejeitada.",
     "chatErrorQuota": "A sua chave de IA esgotou a quota ou atingiu o limite de pedidos.",
-    "chatErrorUnreadable": "Não foi possível carregar as suas definições de IA.",
+    "chatErrorUnreadable": "Não foi possível ler a sua chave de IA guardada.",
     "chatErrorUnavailable": "Não foi possível contactar o seu fornecedor de IA.",
     "openSettings": "Abrir definições de IA",
     "saveError": "Não foi possível guardar a chave: {message}",
