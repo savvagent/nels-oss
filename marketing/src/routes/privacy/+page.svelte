@@ -69,10 +69,14 @@
       In every case {SITE.name}'s servers build each request from your data, so {SITE.name} still
       processes it; your own key changes who receives it, not whether {SITE.name} sees it.
       Chats about a budget someone has shared with you use your own provider choice, not the budget owner's.
+      The reverse is also true: if you use your own key but share a budget, a person you share it with
+      who uses the default sends that budget's details to Google's Gemini API through {SITE.name}.
+      If you use your own Gemini key from Google's free (unpaid) tier, Google's terms for unpaid
+      services apply to those requests, and they differ from the paid terms quoted above.
     </p>
 
     <h2>Who we share data with</h2>
-    <p>We do not sell your personal information. We share data only with service providers ("subprocessors") that help us run {SITE.name}, under contracts that limit their use of it:</p>
+    <p>We do not sell your personal information. We share data only with service providers ("subprocessors") that help us run {SITE.name}, under contracts that limit their use of it. The one exception is an AI provider you choose with your own API key: your own agreement with that provider governs those requests, not a contract with {SITE.name}.</p>
     <ul>
       <li><strong>AI providers: Google (Gemini API) by default; OpenAI or Anthropic only if you choose them with your own key</strong> — AI processing of your prompts and budget context.</li>
       <li><strong>Stripe</strong> — subscription billing, payment processing, and bank account connections (Stripe Financial Connections). When you link a bank account, you interact with Stripe directly and Stripe collects information from you and your financial institution under its own <a href="https://stripe.com/privacy">privacy policy</a>. If we add bank connections for other regions, we will use comparable regulated providers and update this policy.</li>
