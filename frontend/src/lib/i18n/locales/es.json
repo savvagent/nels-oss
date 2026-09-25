@@ -629,7 +629,7 @@
     "termsLink": "Leer las condiciones de datos de la API de {provider}",
     "chatErrorRejected": "Tu clave de IA fue rechazada.",
     "chatErrorQuota": "Tu clave de IA no tiene cuota o ha alcanzado el límite de solicitudes.",
-    "chatErrorUnreadable": "No se pudo leer tu clave de IA guardada.",
+    "chatErrorUnreadable": "No se pudo cargar tu configuración de IA.",
     "chatErrorUnavailable": "No se pudo conectar con tu proveedor de IA.",
     "openSettings": "Abrir ajustes de IA",
     "saveError": "No se pudo guardar la clave: {message}",

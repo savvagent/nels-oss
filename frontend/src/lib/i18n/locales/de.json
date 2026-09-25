@@ -629,7 +629,7 @@
     "termsLink": "API-Datenbedingungen von {provider} lesen",
     "chatErrorRejected": "Ihr KI-Schlüssel wurde abgelehnt.",
     "chatErrorQuota": "Das Kontingent Ihres KI-Schlüssels ist aufgebraucht oder er ist ratenbegrenzt.",
-    "chatErrorUnreadable": "Ihr gespeicherter KI-Schlüssel konnte nicht gelesen werden.",
+    "chatErrorUnreadable": "Ihre KI-Einstellungen konnten nicht geladen werden.",
     "chatErrorUnavailable": "Ihr KI-Anbieter war nicht erreichbar.",
     "openSettings": "KI-Einstellungen öffnen",
     "saveError": "Der Schlüssel konnte nicht gespeichert werden: {message}",

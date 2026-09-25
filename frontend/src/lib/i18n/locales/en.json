@@ -629,7 +629,7 @@
     "termsLink": "Read {provider}'s API data terms",
     "chatErrorRejected": "Your AI key was rejected.",
     "chatErrorQuota": "Your AI key is out of quota or rate-limited.",
-    "chatErrorUnreadable": "Your saved AI key couldn't be read.",
+    "chatErrorUnreadable": "Your AI settings couldn't be loaded.",
     "chatErrorUnavailable": "Your AI provider couldn't be reached.",
     "openSettings": "Open AI settings",
     "saveError": "Couldn't save the key: {message}",

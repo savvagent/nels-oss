@@ -287,7 +287,7 @@ fn llm_error_reply(err: crate::llm::LlmError, creds: Option<&crate::llm::LlmCred
     use crate::llm::{KeySource, LlmError};
     let byo = creds.filter(|c| c.source == KeySource::Byo).map(|c| c.provider.display_name());
     let response_text = match (err, byo) {
-        (LlmError::KeyUnavailable, _) => "I couldn't read your saved AI key. Please re-enter it in Settings → AI provider.".to_string(),
+        (LlmError::KeyUnavailable, _) => "I couldn't load your AI settings just now. Please try again in a moment. If you use your own API key and this keeps happening, re-enter it in Settings → AI provider.".to_string(),
         (LlmError::Auth, Some(p)) => format!("Your {p} key was rejected. Check or replace it in Settings → AI provider."),
         (LlmError::RateLimited, Some(p)) => format!("{p} says your key is out of quota or rate-limited. Try again later, or check your {p} account."),
         (LlmError::Timeout | LlmError::Transport, Some(p)) => format!("I couldn't reach {p}. Please try again in a moment."),

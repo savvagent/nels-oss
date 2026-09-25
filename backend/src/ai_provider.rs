@@ -112,12 +112,22 @@ pub async fn put_ai_provider(
         .filter(|p| enabled_byo_providers().contains(p))
         .ok_or((StatusCode::BAD_REQUEST, "That AI provider isn't available.".to_string()))?;
 
-    // Rate limit (fails closed on a DB error), then record this attempt.
+    // Rate limit (fails closed on a DB error), then record this attempt. The
+    // count and the insert run in one transaction under a per-user advisory
+    // lock, so two concurrent PUTs cannot both pass the check. The transaction
+    // commits BEFORE the outbound validation call, so the lock is never held
+    // across network I/O.
+    let mut tx = state.db.begin().await.map_err(internal_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ai_key_validation:' || $1::text))")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
     let recent: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM ai_key_validation_attempts WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '1 hour'",
     )
     .bind(user_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(internal_error)?;
     if recent >= VALIDATIONS_PER_HOUR {
@@ -126,9 +136,10 @@ pub async fn put_ai_provider(
     sqlx::query("INSERT INTO ai_key_validation_attempts (id, user_id) VALUES ($1, $2)")
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(internal_error)?;
+    tx.commit().await.map_err(internal_error)?;
 
     match llm::validate_key(provider, &key).await {
         Ok(()) => {}
@@ -296,6 +307,32 @@ mod tests {
         let e = put_ai_provider(State(st.clone()), Extension(uid),
             Json(PutAiProvider { provider: "openai".into(), api_key: "sk-x".into() })).await.unwrap_err();
         assert_eq!(e.0, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres; run via: cargo test -- --ignored"]
+    async fn put_rate_limit_is_atomic_under_concurrency() {
+        let _l = crate::rag::GEMINI_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        let prev = std::env::var("OPENAI_API_BASE").ok();
+        std::env::set_var("OPENAI_API_BASE", server.uri());
+        Mock::given(method("GET")).and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(401)).mount(&server).await;
+        let st = state().await;
+        let uid = mk_user(&st.db).await;
+        for _ in 0..9 {
+            sqlx::query("INSERT INTO ai_key_validation_attempts (id, user_id) VALUES ($1,$2)").bind(Uuid::new_v4()).bind(uid).execute(&st.db).await.unwrap();
+        }
+        let put = || put_ai_provider(State(st.clone()), Extension(uid),
+            Json(PutAiProvider { provider: "openai".into(), api_key: "sk-bad".into() }));
+        let (a, b, c, d, e) = tokio::join!(put(), put(), put(), put(), put());
+        let codes: Vec<StatusCode> = [a, b, c, d, e].into_iter().map(|r| r.unwrap_err().0).collect();
+        let limited = codes.iter().filter(|c| **c == StatusCode::TOO_MANY_REQUESTS).count();
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ai_key_validation_attempts WHERE user_id=$1")
+            .bind(uid).fetch_one(&st.db).await.unwrap();
+        match prev { Some(v) => std::env::set_var("OPENAI_API_BASE", v), None => std::env::remove_var("OPENAI_API_BASE") }
+        assert_eq!(total, 10, "exactly one request may pass the limiter: {codes:?}");
+        assert!(limited >= 4, "{codes:?}");
     }
 
     #[tokio::test]
