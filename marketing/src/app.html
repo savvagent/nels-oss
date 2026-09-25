@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="%lang%">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+		<meta name="theme-color" content="#aa3bff" />
+		<!-- ?rev=N cache-busts the icon URLs so browsers (which cache favicons by
+		     URL) re-fetch after a logo change instead of serving the stale mark.
+		     Bump N on every icon redesign; the filenames stay stable. -->
+		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/icon.svg?rev=2" />
+		<link rel="icon" type="image/png" sizes="32x32" href="%sveltekit.assets%/favicon-32x32.png?rev=2" />
+		<link rel="icon" type="image/png" sizes="16x16" href="%sveltekit.assets%/favicon-16x16.png?rev=2" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.ico?rev=2" sizes="any" />
+		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png?rev=2" />
+		<script>
+			// Apply the saved theme before paint to avoid a flash of the wrong theme.
+			// Mirrors src/lib/theme.js: "light"/"dark" set data-theme; "system" (or
+			// unset) leaves it off so daisyUI resolves from prefers-color-scheme.
+			(function () {
+				try {
+					var t = localStorage.getItem('nels_theme');
+					if (t === 'light')
+						document.documentElement.setAttribute('data-theme', 'nels-light');
+					else if (t === 'dark')
+						document.documentElement.setAttribute('data-theme', 'nels-dark');
+				} catch (e) {}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

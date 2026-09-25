@@ -1,0 +1,180 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: nels-light --default, nels-dark --prefersdark;
+}
+
+/* Light theme — purple/indigo brand on a clean light base. */
+@plugin "daisyui/theme" {
+  name: "nels-light";
+  default: true;
+  prefersdark: false;
+  color-scheme: light;
+
+  --color-base-100: oklch(99% 0.003 264);
+  --color-base-200: oklch(96% 0.006 264);
+  --color-base-300: oklch(91% 0.01 264);
+  --color-base-content: oklch(25% 0.03 264);
+
+  --color-primary: oklch(55% 0.26 300);
+  --color-primary-content: oklch(98% 0.01 300);
+
+  --color-secondary: oklch(52% 0.2 277);
+  --color-secondary-content: oklch(98% 0.01 277);
+
+  --color-accent: oklch(60% 0.2 300);
+  --color-accent-content: oklch(98% 0.01 300);
+
+  --color-neutral: oklch(35% 0.03 264);
+  --color-neutral-content: oklch(98% 0.01 264);
+
+  --color-info: oklch(65% 0.18 230);
+  --color-info-content: oklch(98% 0.01 230);
+
+  --color-success: oklch(60% 0.16 160);
+  --color-success-content: oklch(98% 0.01 160);
+
+  --color-warning: oklch(80% 0.16 80);
+  --color-warning-content: oklch(25% 0.05 80);
+
+  --color-error: oklch(58% 0.24 25);
+  --color-error-content: oklch(98% 0.01 25);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --border: 1px;
+}
+
+/* Dark theme — tuned to preserve the existing slate-900/950 look. */
+@plugin "daisyui/theme" {
+  name: "nels-dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: oklch(20% 0.03 264);
+  --color-base-200: oklch(16% 0.026 264);
+  --color-base-300: oklch(27% 0.035 264);
+  --color-base-content: oklch(96% 0.01 264);
+
+  --color-primary: oklch(70% 0.24 300);
+  --color-primary-content: oklch(16% 0.03 300);
+
+  --color-secondary: oklch(62% 0.2 277);
+  --color-secondary-content: oklch(98% 0.01 277);
+
+  --color-accent: oklch(78% 0.16 300);
+  --color-accent-content: oklch(20% 0.04 300);
+
+  --color-neutral: oklch(30% 0.03 264);
+  --color-neutral-content: oklch(96% 0.01 264);
+
+  --color-info: oklch(72% 0.16 230);
+  --color-info-content: oklch(16% 0.03 230);
+
+  --color-success: oklch(76% 0.17 160);
+  --color-success-content: oklch(18% 0.04 160);
+
+  --color-warning: oklch(82% 0.17 80);
+  --color-warning-content: oklch(20% 0.05 80);
+
+  --color-error: oklch(68% 0.23 25);
+  --color-error-content: oklch(18% 0.04 25);
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --border: 1px;
+}
+
+:root {
+  font-family: "Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+/* One-shot entrance animations. These utility classes are used throughout
+   App.svelte (chat bubbles, the auth register card, the error banner) but were
+   never actually defined — `animate-fade`/`animate-fade-in` are NOT Tailwind
+   built-ins (only spin/ping/pulse/bounce are), so they rendered inert. Defining
+   them here activates the intended subtle fade-in. Errors and chat messages
+   fade in ONCE and hold still (no looping) — unlike a bouncing alert. Namespaced
+   keyframes avoid any collision with framework-generated names. */
+@keyframes nels-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nels-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fade {
+  animation: nels-fade 0.25s ease-out both;
+}
+.animate-fade-in {
+  animation: nels-fade-in 0.3s ease-out both;
+}
+/* Respect users who prefer reduced motion: show final state, no animation. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade,
+  .animate-fade-in {
+    animation: none;
+  }
+}
+
+/* User-selectable text size (see src/lib/textsize.js). On desktop these set the
+   root font-size directly; the rem-based scale grows/shrinks proportionally.
+   The base :root has no explicit size (browser default ~16px). */
+:root[data-text-size="small"] {
+  font-size: 15px;
+}
+:root[data-text-size="normal"] {
+  font-size: 16px;
+}
+:root[data-text-size="large"] {
+  font-size: 18px;
+}
+
+/* Mobile reads small: the type scale is tuned for dense desktop layouts. Bump
+   the root font-size on phones so the whole rem-based scale (chat text, inputs,
+   buttons, spacing, touch targets) grows proportionally. Desktop is unchanged.
+   Tune this single value to taste. */
+@media (max-width: 767px) {
+  :root {
+    font-size: 18px;
+  }
+}
+
+/* On mobile the desktop text-size px values would shrink type below the phone
+   bump above. Compound the bump instead: each choice maps to a larger mobile
+   value (small 17 / normal 18 / large 21) so the user's selection still wins
+   while staying phone-legible. Placed after the bump so source order favours it. */
+@media (max-width: 767px) {
+  :root[data-text-size="small"] {
+    font-size: 17px;
+  }
+  :root[data-text-size="normal"] {
+    font-size: 18px;
+  }
+  :root[data-text-size="large"] {
+    font-size: 21px;
+  }
+}
+
+/* Let daisyUI's active theme drive the page background and text colour.
+   (Previously these were hardcoded to slate, which forced dark in every theme.) */
+/* Lock the document to the dynamic viewport so only inner regions scroll.
+   Without this, a pull-to-refresh / overscroll gesture in the installed PWA
+   scrolls the whole app shell and parks the bottom-docked chat input below the
+   fold. overscroll-behavior: none disables pull-to-refresh and the bounce. */
+html,
+body {
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-base-100);
+  color: var(--color-base-content);
+}

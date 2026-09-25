@@ -1,0 +1,26 @@
+[package]
+name = "local-first-automerge-spike"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+description = "Throwaway spike for epic #566: does Nels's domain survive Automerge merge semantics?"
+
+# Deliberately NOT a workspace member and not referenced by any CI or deploy
+# workflow. See docs/superpowers/plans/2026-09-24-local-first-automerge-spike.md.
+[workspace]
+
+[dependencies]
+automerge = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+serde = { version = "1", features = ["derive"] }
+# Week 2 (2a: signed, encrypted envelopes). Pulled in now so the crate's
+# dependency set matches the plan and compiles from Day 1.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+chacha20poly1305 = "0.10"
+# Key wrapping (sealed box): X25519 ECDH on curve25519-dalek, HKDF-SHA256.
+curve25519-dalek = "4"
+hkdf = "0.12"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }

@@ -1,0 +1,26 @@
+# Secrets / environment — never commit real .env (templates *.example are tracked)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Rust backend build artifacts
+**/target/
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/dist-ssr/
+*.local
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+*.swp
+
+# Git worktrees
+.worktrees/

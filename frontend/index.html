@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- ?rev=N cache-busts the icon URLs so browsers (which cache favicons and
+         PWA icons by URL) re-fetch after a logo change instead of serving the
+         stale mark. Bump N on every icon redesign; the filenames stay stable. -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg?rev=2" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?rev=2" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?rev=2" />
+    <link rel="icon" href="/favicon.ico?rev=2" sizes="any" />
+    <!-- interactive-widget=resizes-content: when the on-screen keyboard opens,
+         shrink the layout viewport (and 100dvh) to the space above it so the
+         dvh-based flex shell docks the chat input directly above the keyboard,
+         instead of relying on the browser's flaky auto-pan to reveal it. -->
+    <!-- No maximum-scale / user-scalable=no: blocking pinch-zoom is an
+         accessibility anti-pattern. Inputs use >=16px font (see mobile root
+         font-size bump in app.css), so iOS focus auto-zoom won't trigger. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#aa3bff" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Nels AI Financial Agent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?rev=2" />
+    <title>Nels AI Financial Agent</title>
+    <script>
+      // Apply the saved theme before paint to avoid a flash of the wrong theme.
+      // Mirrors src/lib/theme.js: "light"/"dark" set data-theme; "system" (or
+      // unset) leaves it off so daisyUI resolves from prefers-color-scheme.
+      (function () {
+        try {
+          var t = localStorage.getItem("nels_theme");
+          if (t === "light")
+            document.documentElement.setAttribute("data-theme", "nels-light");
+          else if (t === "dark")
+            document.documentElement.setAttribute("data-theme", "nels-dark");
+          // Apply saved text size before paint too (mirrors src/lib/textsize.js).
+          var s = localStorage.getItem("nels_textsize");
+          if (s === "small" || s === "normal" || s === "large")
+            document.documentElement.setAttribute("data-text-size", s);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="min-h-screen">
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

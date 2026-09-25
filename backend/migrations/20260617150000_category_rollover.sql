@@ -1,0 +1,15 @@
+-- Per-category budget rollover (issue #49).
+--
+-- Adds an opt-out flag to each category controlling whether that category's
+-- unused remainder carries forward under rollover.
+--
+-- DEFAULT TRUE is deliberate and DIVERGES from budgets.rollover_enabled's
+-- DEFAULT FALSE (#47). Rationale: the budget-level switch is the master gate
+-- (a category only carries when the budget's rollover is also on). For budgets
+-- that ALREADY have rollover enabled, defaulting every existing category to TRUE
+-- means behavior is identical to #47 — every category keeps carrying its
+-- remainder exactly as before (and, as in #47, an overspent category simply
+-- carries 0). The carry only CHANGES once a user explicitly opts a specific
+-- category OUT (sets rollover_enabled = FALSE). This preserves the #47 contract
+-- for all existing data and makes per-category opt-out purely additive.
+ALTER TABLE categories ADD COLUMN rollover_enabled BOOLEAN NOT NULL DEFAULT TRUE;

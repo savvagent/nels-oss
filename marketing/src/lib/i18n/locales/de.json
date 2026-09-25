@@ -1,0 +1,538 @@
+{
+  "_meta": {
+    "machineTranslated": true,
+    "review": "pending native-speaker review",
+    "locale": "de"
+  },
+  "nav": {
+    "features": "Funktionen",
+    "howItWorks": "So funktioniert's",
+    "pricing": "Preise",
+    "security": "Sicherheit",
+    "compare": "Vergleich"
+  },
+  "cta": {
+    "signIn": "Anmelden",
+    "startTrial": "Kostenlose Testphase starten",
+    "tryFree": "{days} Tage kostenlos testen"
+  },
+  "language": {
+    "label": "Sprache"
+  },
+  "theme": {
+    "groupLabel": "Design",
+    "light": "Hell",
+    "system": "System",
+    "dark": "Dunkel"
+  },
+  "footer": {
+    "product": "Produkt",
+    "company": "Unternehmen",
+    "legal": "Rechtliches",
+    "features": "Funktionen",
+    "pricing": "Preise",
+    "security": "Sicherheit",
+    "compare": "Vergleich",
+    "about": "Über uns",
+    "faq": "FAQ",
+    "contact": "Kontakt",
+    "privacy": "Datenschutz",
+    "terms": "AGB",
+    "rights": "© Savvagent, LLC. Nels bietet allgemeine Budgetierungstools, keine Finanzberatung."
+  },
+  "home": {
+    "seo": {
+      "title": "KI-Budget-Copilot",
+      "description": "Finden Sie im Gespräch zu finanzieller Klarheit. Verwalten Sie Budgets, behalten Sie Ausgaben im Blick und teilen Sie alles mit Ihrer Familie – ganz ohne Passwort."
+    },
+    "hero": {
+      "title": "Im Gespräch zu finanzieller Klarheit",
+      "subtitle": "Budgetieren Sie smarter mit einer KI, die Sie versteht – ohne Passwörter, ohne Tabellen, ohne Fachjargon.",
+      "ctaSecondary": "So funktioniert's",
+      "trustLine": "{days} Tage kostenlos testen · Keine Kreditkarte · Anmeldung ohne Passwort"
+    },
+    "why": {
+      "title": "Warum die meisten Menschen das Budgetieren aufgeben",
+      "card1": {
+        "title": "Formulare sind mühsam",
+        "body": "Jede Transaktion in Kategorien einzutragen fühlt sich wie Dateneingabe an. Spätestens im zweiten Monat hören Sie auf."
+      },
+      "card2": {
+        "title": "Tabellen sind nicht für Zusammenarbeit gemacht",
+        "body": "Widersprüchliche Änderungen, kein Änderungsverlauf, Unklarheit darüber, wer was geändert hat. Partner geben auf."
+      },
+      "card3": {
+        "title": "Apps behandeln Sie wie Fremde",
+        "body": "Die meiste Software ignoriert, was Sie ihr letztes Jahr gesagt haben, und kann Ihnen keine persönlichen Einblicke geben."
+      }
+    },
+    "features": {
+      "title": "Alles, was Sie brauchen, um gemeinsam zu budgetieren",
+      "item1": {
+        "title": "Budgets nach Ihren Vorstellungen festlegen",
+        "body": "Erstellen Sie ein Budget oder viele – Haushalt, Nebeneinkünfte, Jahresziele. Legen Sie Limits nach Kategorie und Zeitraum fest. Die KI hilft Ihnen, ein realistisches Budget aufzustellen, das Sie dann mit Ihrem Partner oder Berater teilen können."
+      },
+      "item2": {
+        "title": "Sagen Sie es einfach der KI",
+        "body": "Schreiben Sie „gestern 25 € für Benzin ausgegeben“ und Nels kategorisiert es automatisch. Erhalten Sie Hinweise bei 80 % und 100 % eines Limits sowie tägliche, wöchentliche oder monatliche Erinnerungen."
+      },
+      "item3": {
+        "title": "Verstehen Sie Ihr Geld",
+        "body": "Fragen Sie „Wie viel habe ich diesen Monat fürs Essengehen ausgegeben?“ Nels liefert Aufschlüsselungen nach Kategorien, Trends, die größten Transaktionen und eine verständliche Erläuterung, wohin Ihr Geld fließt."
+      },
+      "item4": {
+        "title": "Gemeinsam sparen, gemeinsam feiern",
+        "body": "Legen Sie Spar- oder Schuldentilgungsziele fest, verfolgen Sie den Fortschritt in Echtzeit und feiern Sie Meilensteine – das schafft Motivation statt schlechtem Gewissen. Teilen Sie Ziele, damit alle an einem Strang ziehen."
+      }
+    },
+    "security": {
+      "title": "Auf Vertrauen gebaut. Nach Standards gesichert.",
+      "body": "Melden Sie sich passwortlos mit TOTP an – demselben Standard, den auch Banken nutzen – über Google Authenticator, 1Password, Authy oder eine beliebige Standard-App. Keine Passwörter, die gestohlen werden könnten. Ihre Daten werden bei der Übertragung verschlüsselt, und wir verkaufen sie niemals.",
+      "link": "Mehr über Sicherheit erfahren"
+    },
+    "pricing": {
+      "title": "Einfache Preise, keine Überraschungen",
+      "body": "{days} Tage kostenlos, danach {monthly}/Monat oder {annual}/Jahr. Jederzeit kündbar.",
+      "link": "Preisdetails ansehen"
+    },
+    "faq": {
+      "title": "Häufige Fragen",
+      "q1": "Bieten Sie Finanz- oder Anlageberatung an?",
+      "a1": "Nein. Nels bietet auf Ihren Daten basierende, persönliche Ausgabeneinblicke, ist aber kein registrierter Finanzberater.",
+      "q2": "Sind meine Daten sicher?",
+      "a2": "Ja. Nels nutzt die passwortlose Anmeldung per Authenticator-App und verschlüsselt Daten bei der Übertragung. Wir verkaufen Ihre Daten nicht.",
+      "q3": "Kann ich ein Budget mit meinem Partner oder meiner Familie teilen?",
+      "a3": "Ja – laden Sie sie per E-Mail mit Lese-, Bearbeitungs- oder Eigentümerrechten ein. Jede Änderung wird in einem Änderungsprotokoll festgehalten.",
+      "q4": "Wie funktioniert die kostenlose Testphase?",
+      "a4": "Testen Sie Nels {days} Tage lang kostenlos, ohne Kreditkarte. Danach kostet es {monthly}/Monat oder {annual}/Jahr."
+    },
+    "finalCta": {
+      "title": "Bereit, smarter zu budgetieren?",
+      "body": "Starten Sie Ihre kostenlose {days}-tägige Testphase. Keine Kreditkarte. Keine Passwörter."
+    }
+  },
+  "features": {
+    "seo": {
+      "title": "Funktionen",
+      "description": "Verwalten Sie Budgets, teilen Sie sie mit der Familie, erfassen Sie Ausgaben im Gespräch und erhalten Sie KI-gestützte Einblicke. Keine Passwörter. Keine Tabellen."
+    },
+    "title": "Alles, was Nels kann",
+    "subtitle": "Fünf Säulen, ein dialogfähiger Co-Pilot.",
+    "pillar1": {
+      "sub": "Nach Ihren Vorstellungen einrichten",
+      "h": "Budgetverwaltung",
+      "body": "Erstellen Sie ein Budget oder viele – für den Haushalt, freiberufliche Einkünfte oder das jährliche Sparen. Legen Sie Limits nach Kategorie und Zeitraum fest. Teilen Sie mit Partner, Steuerberater oder Berater über Lese-/Bearbeitungs-/Eigentümerrechte und ein vollständiges Änderungsprotokoll."
+    },
+    "pillar2": {
+      "sub": "Sagen Sie es einfach der KI",
+      "h": "Ausgabenerfassung im Gespräch",
+      "body": "Tippen Sie ein, was Sie ausgegeben haben, und Nels kategorisiert es automatisch. Hinweise in Echtzeit bei 80 % und 100 % eines Budgetlimits sowie tägliche, wöchentliche oder monatliche Erinnerungen, damit Sie auf Kurs bleiben."
+    },
+    "pillar3": {
+      "sub": "Verstehen Sie Ihr Geld",
+      "h": "Analyse & Einblicke",
+      "body": "Aufschlüsselungen nach Kategorien, Ausgabentrends, die größten Transaktionen und eine von der KI verfasste Erläuterung Ihrer Muster – mit semantischem Gedächtnis vergangener Gespräche für kontextbezogene Antworten."
+    },
+    "pillar4": {
+      "sub": "Gemeinsam sparen",
+      "h": "Ziele setzen & feiern",
+      "body": "Definieren Sie Spar- und Schuldentilgungsziele, verfolgen Sie den Fortschritt in Echtzeit und feiern Sie Meilensteine. Teilen Sie Ziele mit der Familie, damit alle gemeinsam an einem Strang ziehen."
+    },
+    "pillar5": {
+      "sub": "Automatisch synchronisieren",
+      "h": "Automatische Bankkonto-Synchronisierung",
+      "body": "Verknüpfen Sie ein Bankkonto, und Nels importiert Transaktionen automatisch – keine manuelle Eingabe. Im Pro-Upgrade enthalten ({monthly}/Monat, USA)."
+    }
+  },
+  "howItWorks": {
+    "seo": {
+      "title": "So funktioniert's",
+      "description": "Sehen Sie, wie Nels das Budgetieren einfach macht: passwortlos anmelden, Budgets erstellen, Ausgaben im Chat erfassen und KI-Einblicke erhalten."
+    },
+    "title": "So funktioniert Nels",
+    "subtitle": "Vier Schritte von der Anmeldung bis zum Einblick.",
+    "step1": {
+      "name": "Passwortlos anmelden",
+      "text": "Erstellen Sie Ihr Konto mit einer Authenticator-App – keine Passwörter zum Festlegen oder Merken."
+    },
+    "step2": {
+      "name": "Budgets erstellen und teilen",
+      "text": "Richten Sie ein oder mehrere Budgets ein und laden Sie Ihre Familie mit Lese-, Bearbeitungs- oder Eigentümerrechten ein."
+    },
+    "step3": {
+      "name": "Ausgaben im Chat erfassen",
+      "text": "Sagen Sie Nels, was Sie ausgegeben haben, und es kategorisiert alles automatisch."
+    },
+    "step4": {
+      "name": "KI-Einblicke erhalten",
+      "text": "Sehen Sie Ausgabentrends, Aufschlüsselungen nach Kategorien und den Fortschritt zu Ihren Zielen."
+    }
+  },
+  "pricing": {
+    "seo": {
+      "title": "Preise",
+      "description": "{days} Tage kostenlos, danach {monthly}/Monat oder {annual}/Jahr. Keine Kreditkarte zum Start. Jederzeit kündbar."
+    },
+    "title": "Einfache, faire Preise",
+    "subtitle": "{days} Tage kostenlos, dann wählen Sie den passenden Tarif. Keine Kreditkarte zum Start. Jederzeit kündbar.",
+    "syncNote": "Jetzt inklusive automatischer Bankkonto-Synchronisierung (USA) – Bank verknüpfen, keine manuelle Eingabe.",
+    "monthly": "Monatlich",
+    "perMonth": "/Monat",
+    "annual": "Jährlich",
+    "perYear": "/Jahr",
+    "bestValue": "Jährliche Zahlung",
+    "annualNote": "Gleicher Monatspreis, einmal jährlich abgerechnet",
+    "includedTitle": "Alles inklusive",
+    "included1": "Unbegrenzte Budgets",
+    "included2": "Ausgabenerfassung im Gespräch & automatische Kategorisierung",
+    "included3": "Haushaltsfreigabe mit Lese-/Bearbeitungs-/Eigentümerrechten + Änderungsprotokoll",
+    "included4": "KI-Einblicke, Berichte und Ausgabentrends",
+    "included5": "Spar- & Schuldentilgungsziele mit Meilenstein-Verfolgung",
+    "included6": "Passwortlose Anmeldung per Authenticator-App",
+    "included7": "Automatische Bankkonto-Synchronisierung – Bank verknüpfen, keine manuelle Eingabe (USA)",
+    "trustLine": "{days} Tage kostenlos testen · Keine Kreditkarte erforderlich · Anmeldung ohne Passwort",
+    "billingPeriod": "Abrechnungszeitraum",
+    "saveBadge": "2 Monate sparen",
+    "tierBasicName": "Basis",
+    "tierBasicTagline": "Alles, was Sie zum Budgetieren brauchen.",
+    "tierProName": "Pro",
+    "tierProTagline": "Budget plus automatische Banksynchronisierung.",
+    "bankSyncExcluded": "Automatische Banksynchronisierung nicht enthalten",
+    "everythingInBasic": "Alles aus Basis, plus:",
+    "mostPopular": "Am beliebtesten"
+  },
+  "security": {
+    "seo": {
+      "title": "Sicherheit & Datenschutz",
+      "description": "Nels nutzt die passwortlose Anmeldung per TOTP-Authenticator-App und verschlüsselt Daten bei der Übertragung. Ihre Finanzdaten bleiben privat."
+    },
+    "title": "Passwortlos und privat von Grund auf",
+    "h1": "Anmeldung ohne Passwort",
+    "p1": "Nels nutzt TOTP (zeitbasierte Einmalpasswörter) – denselben Standard, den Banken und Cloud-Anbieter verwenden. Melden Sie sich mit Google Authenticator, 1Password, Authy oder einer beliebigen Standard-Authenticator-App an. Es gibt keine Passwörter, die man vergessen oder die bei einem Datenleck offengelegt werden könnten.",
+    "h2": "Ihre Daten",
+    "p2": "Ihre Budgetdaten werden bei der Übertragung verschlüsselt (durchgängig HTTPS). Wir verkaufen Ihre Daten niemals und erstellen keine Werbeprofile. Um Ihre Fragen zu beantworten, sendet Nels die relevanten Budgetdaten an einen externen KI-Anbieter (derzeit Googles Gemini), ausschließlich um eine Antwort zu generieren – niemals für Werbung und niemals zum Verkauf. Wenn Sie ein Bankkonto verknüpfen (eine Pro-Funktion), werden Kontodaten und Transaktionsverlauf über Stripe Financial Connections, unseren regulierten Anbieter für Bankverbindungen, importiert – Ihre Bank-Zugangsdaten sehen wir niemals. Einzelheiten finden Sie in unserer <a href=\"/privacy\">Datenschutzerklärung</a>.",
+    "h3": "Zusammenarbeit, die Sie nachvollziehen können",
+    "p3": "Teilen Sie Budgets mit Lese-, Bearbeitungs- oder Eigentümerrechten. Jede Änderung wird in einem Änderungsprotokoll festgehalten, damit es keine Überraschungen darüber gibt, wer was geändert hat."
+  },
+  "compare": {
+    "seo": {
+      "title": "Vergleich",
+      "description": "Ein ehrlicher Blick darauf, wie sich das dialogbasierte, passwortlose Budgetieren von Nels gegenüber KI-Assistenten, Budget-Apps und Finanzplanern schlägt."
+    },
+    "title": "Wie sich Nels schlägt",
+    "subtitle": "Ein ehrlicher Vergleich, aktualisiert mit jeder Produktänderung. Jede Seite nennt etwas, das das andere Produkt besser macht.",
+    "hubIntro": "Wähle das Produkt, mit dem du Nels vergleichen möchtest.",
+    "colFeature": "Funktion",
+    "colNels": "Nels",
+    "viewComparison": "Vollständigen Vergleich ansehen",
+    "verifiedOn": "Verglichen anhand öffentlich zugänglicher Preise vom {date}.",
+    "tableScrollLabel": "Vergleichstabelle: {name}",
+    "scrollRegion": "Vergleichen: {name}",
+    "spreadsheetRow": "Eine Tabelle tut, was du baust, kostenlos — solange du weiter daran baust. Nels ist die Version, die sich selbst pflegt.",
+    "segment": {
+      "aiNative": "KI-Geldassistenten",
+      "traditional": "Budget-Apps",
+      "planning": "Planung und Vermögensverwaltung"
+    },
+    "pricing": {
+      "label": "Preis",
+      "monthly": "{amount}/Monat",
+      "annual": "{amount}/Jahr",
+      "from": "Ab {price}",
+      "freeThen": "Kostenlos, dann {price}",
+      "freeThenFrom": "Kostenlos, dann ab {price}",
+      "orAnnual": "oder {price}"
+    },
+    "note": {
+      "promo": "Aktionspreis, kein Listenpreis.",
+      "secondHand": "Aus Berichten Dritter, nicht von der Website des Anbieters selbst.",
+      "undisclosed": "Preise nicht veröffentlicht.",
+      "annualOnly": "Jährliche Abrechnung; kein Monatstarif."
+    },
+    "mark": {
+      "yes": "Ja",
+      "partial": "Teilweise",
+      "no": "Nein"
+    },
+    "feature": {
+      "conversationalLogging": "Ausgaben per Chat erfassen",
+      "writableLedger": "Bearbeitbares Budget, nicht nur ein Dashboard",
+      "envelopeBudgeting": "Umschlagsystem / Zero-Based Budgeting",
+      "householdSharing": "Haushaltsfreigabe",
+      "auditLog": "Änderungsprotokoll",
+      "bankSync": "Automatischer Bankabgleich",
+      "passwordless": "Anmeldung ohne Passwort",
+      "aiInsights": "KI-Ausgabenanalysen",
+      "goals": "Spar- und Schuldenziele",
+      "humanAdvisors": "Menschliche Finanzberater",
+      "retirementProjection": "Altersvorsorge-Prognosen"
+    },
+    "chatgpt": {
+      "seo": {
+        "title": "Nels vs. ChatGPT fürs Budget",
+        "description": "ChatGPT liest jetzt Konten. Nels führt das Budget, das du umsetzt: gemeinsam, nach Umschlägen, fair bepreist. Ein ehrlicher Vergleich."
+      },
+      "headline": "Nels im Vergleich zu Finances in ChatGPT",
+      "intro": "ChatGPT verbindet sich jetzt mit deiner Bank und erklärt gut, wohin dein Geld ging. Nur den Plan, den du verfolgen willst, hält es nicht fest — es liest deine Konten, es führt dein Budget nicht.",
+      "whoForTitle": "Für wen was passt",
+      "whoFor": "Willst du Fragen zu bereits ausgegebenem Geld stellen, beantwortet ChatGPT sie gut, und du zahlst vielleicht schon dafür. Willst du ein Budget, das dein Haushalt gemeinsam pflegt und Monat für Monat umsetzt, brauchst du ein anderes Werkzeug.",
+      "strengthTitle": "Was ChatGPT besser kann",
+      "strength": "Es ist schon auf deinem Handy, beantwortet offene Finanzfragen weit über das Budget hinaus, und seine Kontoabdeckung über Plaid ist breiter als unsere. Willst du nur vergangene Ausgaben verstehen, brauchst du Nels dafür nicht.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Ein Dashboard ist kein Budget. ChatGPT zeigt, was passiert ist; Nels hält fest, was passieren sollte — Umschlag-Kategorien, denen du Geld zuweist, geteilt mit deinem Haushalt, mit einem Protokoll, wer was geändert hat.",
+      "faq": {
+        "q1": "Kann ChatGPT mein Budget verwalten?",
+        "a1": "Es kann verbundene Konten lesen und Fragen zu deinen Ausgaben beantworten, aber der Zugriff ist nur lesend — es kann kein Geld bewegen, keine Rechnung zahlen und keinen Handel ausführen, und es führt keine Umschlag-Kategorien, denen du Geld zuweist.",
+        "q2": "Ist die Finanzfunktion von ChatGPT kostenlos?",
+        "a2": "Nein. Sie gehört zu den bezahlten ChatGPT-Stufen und war beim Start nur in den USA verfügbar. Nels kostet nur einen Bruchteil davon, wenn du eigentlich ein Budget brauchst.",
+        "q3": "Können mein Partner und ich uns in ChatGPT ein Budget teilen?",
+        "a3": "Nein. Finances in ChatGPT ist an dein persönliches Konto gebunden. Nels ist für Haushalte gebaut — mit geteilten Budgets, Rechten pro Person und einem Änderungsprotokoll."
+      }
+    },
+    "cleo": {
+      "seo": {
+        "title": "Nels vs. Cleo fürs Budget",
+        "description": "Cleo macht Spaß und hat einen echten Gratis-Tarif. Nels ist ein gemeinsames Haushaltsbudget, keine App für Geldvorschüsse. Ein ehrlicher Vergleich."
+      },
+      "headline": "Nels im Vergleich zu Cleo",
+      "intro": "Cleo macht wirklich Spaß, hat einen echten Gratis-Tarif und kann dir Geld vor deinem nächsten Gehalt vorschießen. Was es nicht leistet, ist ein monatliches Budget, das zwei Menschen gemeinsam pflegen — sein Kontoauszug verfolgt deine eigenen Ausgaben, kein geteiltes Haushaltsbudget.",
+      "whoForTitle": "Für wen was passt",
+      "whoFor": "Cleo ist als Geld-Coach zum Chatten am stärksten, der dich beim Sparen anstupst und dir zwischen zwei Gehältern Geld vorschießen kann, oft sogar kostenlos. Ein Haushaltsbudget mit Umschlag-Kategorien, das du gemeinsam mit jemandem führst, ist ein anderes Problem — und genau das löst Nels.",
+      "strengthTitle": "Was Cleo besser kann",
+      "strength": "Cleo hat einen echten Gratis-Tarif — du kannst es nutzen, ohne zu zahlen, was Nels nicht bietet. Seine Chat-Persönlichkeit macht mehr Spaß als unsere: Es neckt dich wegen deiner Ausgaben und fühlt sich an wie eine Nachricht an eine Freundin, nicht wie ein Formular. Es bietet auch Geldvorschüsse auf dein nächstes Gehalt, mit einer optionalen Gebühr, wenn du das Geld schneller haben willst; Nels bietet weder Vorschüsse noch Produkte zum Kreditaufbau. Ein Gehaltsvorschuss vor dem nächsten Zahltag ist Cleos Job, nicht unserer.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Cleo ist ein Geld-Coach mit einer Karte zum Kreditaufbau; Nels ist ein Kontobuch, das ein Haushalt gemeinsam führt. Cleos Stärke ist der unterhaltsame Anstoß und die Brücke bis zum nächsten Gehalt. Nels' Stärke ist, dass der ganze Haushalt am selben Plan arbeitet, mit einem Protokoll, wer was geändert hat.",
+      "faq": {
+        "q1": "Kann Cleo ein Haushaltsbudget ersetzen?",
+        "a1": "Nicht wirklich. Cleo verfolgt deine eigenen Ausgaben und chattet mit dir darüber, führt aber keine Umschlag-Kategorien, die mehr als eine Person bearbeitet, und es gibt kein Protokoll, wer was geändert hat.",
+        "q2": "Ist Cleo kostenlos?",
+        "a2": "Ja, Cleo hat einen echten Gratis-Tarif; die bezahlten Stufen bringen Geldvorschüsse, Kreditaufbau und höhere Vorschusslimits. Nels bietet nur eine kostenlose Testphase, keinen Gratis-Tarif, weil es für die laufende Aufgabe gebaut ist, ein gemeinsames Budget zu führen.",
+        "q3": "Bietet Cleo Geldvorschüsse, die Nels nicht bietet?",
+        "a3": "Ja. Cleo kann dir Geld vor deinem Gehalt vorschießen, mit einer optionalen Gebühr für schnellere Lieferung. Nels bietet weder Vorschüsse noch Kreditaufbau noch irgendein Kreditprodukt — es ist ein gemeinsames Kontobuch, keine Kreditlinie."
+      }
+    },
+    "era": {
+      "seo": {
+        "title": "Nels vs. Era fürs Haushaltsbudget",
+        "description": "Era gibt jedem KI-Agenten Zugriff auf deine Finanzdaten und bietet Anlage-Recherche. Nels führt das Haushaltsbudget, das du nutzt. Ehrlicher Vergleich."
+      },
+      "headline": "Nels im Vergleich zu Era",
+      "intro": "Era ist keine einzelne App, sondern drei. Context ist ein MCP-Server, der deine Finanzdaten an Claude, ChatGPT oder jeden anderen KI-Agenten weitergibt, den du schon nutzt. Agency ist eine Begleit-App, die automatisch auf deinen Konten handelt, nach Regeln, die du festlegst. Thesis, Anlage-Recherche und Musterportfolios über einen bei der SEC registrierten Anlageberater, ist noch in privater Beta. Keine der drei führt ein Haushaltsbudget.",
+      "whoForTitle": "Für wen was passt",
+      "whoFor": "Wenn du willst, dass dein bestehender KI-Assistent deine Konten sieht und mit deiner Erlaubnis darauf handelt, oder du ernsthafte Anlage-Recherche suchst, ist Era genau dafür gebaut — und für ein technischeres Publikum als Nels. Ein gemeinsames Haushaltsbudget ist ein eigenes Bedürfnis, und dafür ist Nels gebaut.",
+      "strengthTitle": "Was Era besser kann",
+      "strength": "Context ist wirklich offen: Es basiert auf MCP, einem offenen Protokoll, und funktioniert mit Claude, ChatGPT oder jedem MCP-kompatiblen Agenten, statt dich an einen einzigen zu binden. Thesis bringt echte Anlage-Recherche und Musterportfolios über einen bei der SEC registrierten Anlageberater — Backtesting und Portfolio-Analyse —, die Nels nie versucht hat. Wenn du willst, dass deine eigenen KI-Werkzeuge deine Finanzen lesen, oder eine ernsthafte Recherche-Plattform fürs Investieren suchst, deckt Era das bereits ab; Nels versucht es gar nicht erst.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Era ist Infrastruktur für jemanden, der schon einen KI-Workflow hat und seine Finanzen dort einbinden will. Nels ist ein einziges Produkt: ein gemeinsames Haushaltsbudget mit Umschlag-Kategorien, gedacht als das ganze Werkzeug, nicht als Schicht unter einem größeren. Era erweitert den KI-Stack, den du schon hast; Nels führt das Budget selbst.",
+      "faq": {
+        "q1": "Ist Era eine Budget-App?",
+        "a1": "Nicht wirklich. Context gibt KI-Agenten Lesezugriff und, mit deiner Erlaubnis, Schreibzugriff auf deine Konten; Agency automatisiert Geldbewegungen; Thesis ist Anlage-Recherche und Musterportfolios über einen bei der SEC registrierten Anlageberater. Keine der drei führt Umschlag-Kategorien oder einen gemeinsamen Haushaltsplan wie Nels.",
+        "q2": "Funktioniert Era mit Claude und ChatGPT?",
+        "a2": "Ja. Context basiert auf MCP, dem offenen Protokoll, und verbindet sich daher mit Claude, ChatGPT oder jedem MCP-kompatiblen Agenten, statt sie zu ersetzen. Nels ist ein eigenständiges Produkt mit eigenem Assistenten, keins, in das du eine andere KI einsteckst.",
+        "q3": "Kann mein Haushalt in Era ein Budget teilen?",
+        "a3": "In keinem der drei Produkte. Context, Agency und Thesis sind auf den KI-Workflow oder die Geldanlage einer einzelnen Person ausgerichtet, nicht auf einen gemeinsamen Plan. Nels ist für Haushalte gebaut, mit gemeinsamem Kontobuch, Berechtigungen pro Person und einem Prüfprotokoll."
+      }
+    },
+    "origin": {
+      "seo": {
+        "title": "Nels vs. Origin fürs Haushaltsbudget",
+        "description": "Origin bündelt Budget, Investieren und KI-Planung zu einem höheren Preis als Nels. Nels führt das Haushaltsbudget, im Gespräch. Ehrlicher Vergleich."
+      },
+      "headline": "Nels im Vergleich zu Origin",
+      "intro": "Origin bündelt Budget, Investieren und Finanzplanung rund um einen KI-Berater, mit buchbaren Terminen bei menschlichen CFP®-Fachleuten als kostenpflichtiger Zusatzoption, und kostet mehr als Nels, sobald das Einführungsjahr endet. Es ist dafür gebaut, dein ganzes Finanzleben zu verwalten; Nels ist dafür gebaut, dein Haushaltsbudget zu führen — und nur das —, indem du mit ihm sprichst.",
+      "whoForTitle": "Für wen was passt",
+      "whoFor": "Origin ist dafür gebaut, dein Nettovermögen zu verfolgen, Investitionen zu verwalten und KI-geführte Finanzplanung neben deinen Ausgaben zu bekommen — echte Breite an einem Ort. Ein Haushaltsbudget mit Umschlag-Kategorien, geführt im Gespräch und abgesichert durch ein Prüfprotokoll, ist Nels' engere und andere Aufgabe.",
+      "strengthTitle": "Was Origin besser kann",
+      "strength": "Origin verfolgt deine Investitionen, projiziert dein Nettovermögen und reicht bis zur Renten- und Nachlassplanung — Terrain, das Nels nie zu erobern versucht hat. Die alltägliche Beratung kommt von einem KI-Berater, der auf einem registrierten Anlageberater aufbaut, und du kannst zusätzlich kostenpflichtige Termine bei menschlichen CFP®-Fachleuten buchen, wenn du einen willst — etwas, das Nels zu keinem Preis anbietet. Wenn du dein gesamtes Finanzbild an einem Ort verwaltet haben willst, macht Origin das bereits.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Origin bündelt Investieren, Planen und Budgetieren unter einem KI-Berater, mit einem Preis für diesen Umfang. Nels erledigt eine einzige Aufgabe, ganz bewusst — ein gemeinsames Haushaltsbudget, geführt im Gespräch, mit Umschlag-Kategorien und einem Protokoll jeder Änderung. Origins Stärke ist die Breite; Nels' Stärke ist die Tiefe beim Budget allein.",
+      "faq": {
+        "q1": "Ersetzt Origin eine Haushaltsbudget-App wie Nels?",
+        "a1": "Nicht wirklich. Budgetierung ist nur ein Baustein einer viel größeren Plattform, die auch Investieren, Nettovermögen-Tracking und KI-geführte Finanzplanung abdeckt. Sein Umschlag-Budget ist nur teilweise vorhanden, und es führt kein Prüfprotokoll, wer was geändert hat — beides Dinge, auf denen Nels aufbaut.",
+        "q2": "Ist Origin günstiger als Nels?",
+        "a2": "Der Einführungspreis mag das nahelegen, aber das ist eine Aktion fürs erste Jahr, nicht der reguläre Preis — prüfe die aktuellen Bedingungen, bevor du vergleichst. Nach der Verlängerung kostet Origin mehr als Nels, für eine Plattform, die auch Investieren und Planen abdeckt, nicht nur Budgetierung.",
+        "q3": "Kommt Origin mit einem menschlichen Finanzberater?",
+        "a3": "Die alltägliche Beratung ist KI-gesteuert, aber Origin bietet zusätzlich buchbare Termine bei menschlichen CFP®-Fachleuten — vergünstigt für Jahresmitglieder — als kostenpflichtige Zusatzoption, nicht als enthaltene Beraterbeziehung. Nels bietet überhaupt keine Berater an; es ist ein gemeinsames Haushaltskontobuch, keine Planungsplattform, mit einem Prüfprotokoll, das Origin nicht hat."
+      }
+    },
+    "copilot": {
+      "seo": {
+        "title": "Nels vs. Copilot Money fürs Budget",
+        "description": "Design und Kategorisierung von Copilot Money sind exzellent, aber für eine Person gedacht. Nels ist das geteilte, plattformübergreifende Budget."
+      },
+      "headline": "Nels im Vergleich zu Copilot Money",
+      "intro": "Copilot Money ist eine bemerkenswert gut gebaute App für iPhone, iPad, Mac und das Web, mit einer automatischen Kategorisierung, die zu den besten der Kategorie zählt. Sie ist allerdings auf die Konten einer einzigen Person ausgelegt — sie mit einem Partner zu teilen bedeutet, einen Anmeldelink weiterzuleiten, der ihm dieselbe volle Kontrolle gibt wie dir, kein Haushaltsbudget mit getrennten Logins.",
+      "whoForTitle": "Für wen was passt",
+      "whoFor": "Wenn du ein wunderschön gestaltetes Konto mit einem Besitzer willst, das deine Ausgaben für dich kategorisiert, und du auf Apple-Geräten oder im Browser unterwegs bist, macht Copilot Money das schon sehr gut. Ein Budget, in das sich zwei oder mehr Personen getrennt einloggen, jede mit eigenen Rechten und einem Prüfprotokoll, ist stattdessen die Aufgabe von Nels.",
+      "strengthTitle": "Was Copilot Money besser kann",
+      "strength": "Die nativen Apps von Copilot Money für iPhone, iPad und Mac sind ausgefeilter als unsere, und die automatische Transaktionskategorisierung ist wirklich exzellent — schon ab Werk schärfer als das, was wir liefern. Es verfolgt außerdem Investitionen und Nettovermögen neben den Ausgaben, ein Bereich, den Nels nicht abdeckt. Bei Verarbeitung und Kategorisierung ist Copilot Money schlicht das besser gebaute Produkt.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Copilot Money ist eine hervorragend gebaute App für die Finanzen einer einzigen Person, auf Apple-Geräten oder im Web. Nels ist ein Budget, das ein Haushalt gemeinsam führt — Umschlag-Kategorien, die jeder bearbeiten kann, getrennte Logins und ein Protokoll jeder Änderung. Bei App und Kategorisierung gewinnt Copilot Money; beim gemeinsamen Haushaltsplan gewinnt Nels.",
+      "faq": {
+        "q1": "Ist Copilot Money dasselbe wie GitHub Copilot oder Microsoft Copilot?",
+        "a1": "Nein. Copilot Money sagt es selbst: Es ist eine unabhängige App für persönliche Finanzen, ohne Verbindung zu Microsoft, GitHub Copilot oder Microsoft Copilot. Der gemeinsame Name ist Zufall, keine Partnerschaft.",
+        "q2": "Funktioniert Copilot Money unter Android?",
+        "a2": "Nicht als native App. Es gibt sie für iPhone, iPad und Mac, plus eine Web-App, die in jedem Browser läuft — Android gehört einfach nicht zu den Plattformen. Nels ist an keine native App gebunden: Jeder in deinem Haushalt kann es aus dem Browser nutzen, auf jedem Gerät.",
+        "q3": "Können mein Partner und ich uns ein Copilot-Money-Konto teilen?",
+        "a3": "Ja, aber nicht als getrennte Personen. Du leitest einen Anmeldelink weiter, und wer ihn nutzt, bekommt dieselbe volle Kontrolle über das Konto wie du — es gibt kein Prüfprotokoll, wer was geändert hat. Nels gibt jedem Haushaltsmitglied ein eigenes Login und eigene Rechte, mit einem Protokoll jeder Änderung."
+      }
+    },
+    "ynab": {
+      "seo": {
+        "title": "Nels vs. YNAB: gleiche Methode, andere App",
+        "description": "YNAB und Nels geben jedem Dollar eine Aufgabe. YNABs Methode geht tiefer; Nels erfasst Ausgaben im Gespräch – zu einem Bruchteil des Preises."
+      },
+      "headline": "Nels im Vergleich zu YNAB",
+      "intro": "YNAB ist der Grund, warum viele Menschen überhaupt wissen, was nullbasiertes Budgetieren ist. Jedem Dollar eine Aufgabe geben, flexibel auf Überraschungen reagieren, das eigene Geld altern lassen – die Regeln funktionieren, und Nels widerspricht keiner davon. Unter der Oberfläche arbeitet Nels mit derselben Umschlagdisziplin. Anders ist die Bedienung: YNAB verlangt, dass Sie sich hinsetzen und zuweisen, während bei Nels der Satz „vierzig für Lebensmittel ausgegeben“ genügt – die Zuweisung übernimmt die App.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Wenn Ihnen die wöchentliche Sitzung liegt – App öffnen, jede Kategorie durchgehen, Geld bewusst zwischen den Kategorien verschieben –, ist YNAB genau für dieses Ritual gebaut und macht es sehr gut. Wenn genau diese Sitzung der Teil ist, den Sie ständig aufschieben, bietet Nels dieselbe Methode, nur ist das Ritual durch einen Satz ersetzt, den Sie an der Kasse ins Handy tippen.",
+      "strengthTitle": "Was YNAB besser macht",
+      "strength": "YNABs Methode ist älter, tiefer durchdacht und weit besser vermittelt als unsere. Die Regeln wurden über mehr als ein Jahrzehnt verfeinert, die Workshops und Texte dahinter sind wirklich hervorragend, und die Community rund um YNAB beantwortet Fragen, die kein Support-Team beantworten könnte. Die Bankanbindung ist in jedem Tarif enthalten, während Nels sie dem Pro-Tarif vorbehält, und ein Abo deckt einen Haushalt von bis zu sechs Personen ab. Wenn Sie budgetieren lernen und nicht bloß ein Werkzeug in die Hand gedrückt bekommen wollen, ist YNAB das bessere Produkt.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Hier geht es nicht darum, dass die eine App budgetiert und die andere nicht – YNAB und Nels sind sich über die Methode einig. Nehmen Sie YNAB, wenn Sie das ausführlichere Lehrmaterial und die Community dahinter wollen und wenn die bewusste wöchentliche Zuweisung eine Gewohnheit ist, die Sie tatsächlich durchhalten. Nehmen Sie Nels, wenn Ihnen die Disziplin zusagt, die Sitzung aber nie stattfindet, wenn Sie nachvollziehen wollen, wer im Haushalt was geändert hat, und wenn der Preisunterschied für Sie zählt.",
+      "faq": {
+        "q1": "Nutzt Nels Umschlag-Budgetierung wie YNAB?",
+        "a1": "Ja. Beide sind Umschlagsysteme – Geld wird Kategorien zugeteilt, bevor es ausgegeben wird, und wer an einer Stelle zu viel ausgibt, muss den Betrag anderswo abziehen. Wegen dieses gemeinsamen Modells werden die beiden so oft verglichen. Der Unterschied liegt nicht in der Methode, sondern darin, wie Sie sie im Alltag bedienen.",
+        "q2": "Kann ich von YNAB zu Nels wechseln?",
+        "a2": "Ihre Kategorien sind schnell wieder aufgebaut, denn die Konzepte entsprechen einander eins zu eins – eine YNAB-Kategorie ist eine Nels-Kategorie. Einen Ein-Klick-Import gibt es derzeit nicht, historische Transaktionen kommen also nicht automatisch mit. Wenn Ihnen jahrelange YNAB-Historie wichtig ist, ist das ein echter Grund zu bleiben.",
+        "q3": "Ist Nels günstiger als YNAB?",
+        "a3": "Deutlich, sowohl bei monatlicher als auch bei jährlicher Abrechnung – die Tabelle oben führt die aktuellen Angaben von den Preisseiten der Anbieter selbst. Dagegenzuhalten ist: YNABs einziger Preis deckt bis zu sechs Personen ab, und die Bankanbindung ist in jedem Tarif enthalten, während Nels sie im Pro-Tarif führt."
+      }
+    },
+    "monarch": {
+      "seo": {
+        "title": "Nels vs. Monarch Money: die Mint-Alternative",
+        "description": "Monarch ist der beliebte Mint-Nachfolger, stark bei Haushalten und Anlagen. Nels erfasst Ausgaben im Chat und hält fest, wer was geändert hat."
+      },
+      "headline": "Nels im Vergleich zu Monarch Money",
+      "intro": "Als Mint eingestellt wurde, sind sehr viele Menschen bei Monarch gelandet – zu Recht: Es ist eine ausgereifte, vollständige Finanz-App mit wirklich gutem gemeinsamem Budget für Paare und Haushalte. Nels wird nichts anderes behaupten. Die beiden trennt, wie Ausgaben überhaupt ins Budget gelangen und was die App darüber festhält, wer sie eingetragen hat.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Monarch passt zu jemandem, der ein einziges Dashboard über alles haben möchte – Budgets, Vermögen, Anlagen – und bereit ist, einen synchronisierten Transaktionsstrom durchzusehen und zu kategorisieren. Nels passt zu jemandem, der lieber im Moment des Ausgebens sagt, was er ausgegeben hat, und ein Haushaltsbudget will, in dem jede Änderung einer bestimmten Person zuzuordnen ist.",
+      "strengthTitle": "Was Monarch Money besser macht",
+      "strength": "Monarchs Haushaltsfunktion ist keine Alibi-Funktion, sondern echte Zusammenarbeit – unbegrenzt viele Mitwirkende schon im Einstiegstarif, mit Rollen, geteilten Ansichten und Transaktionen, die Sie einem Familienmitglied zur Prüfung markieren können. Sie ist mindestens so gut wie unsere, und bei der Zahl der Mitwirkenden schlicht besser. Die Anlagen- und Vermögensübersicht geht weit über alles hinaus, was Nels leistet, die Bankanbindung ist in jedem Tarif enthalten, während Nels sie Pro vorbehält, und die App ist ausgereifter als unsere. Wenn Sie einen Ort für Ihr gesamtes Finanzbild suchen und nicht nur ein Budget, ist Monarch die stärkere Wahl.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Die gemeinsame Nutzung ist die falsche Achse für diese Entscheidung, denn Monarch macht das gut. Die eigentlichen Fragen sind, ob Sie lieber mit Ihrem Budget sprechen als einen Transaktionsstrom durchzusehen, ob Sie festhalten müssen, wer was geändert hat, und was Sie zahlen wollen. Nels ist das günstigere, dialogbasierte und lückenlos protokollierte Haushaltsbudget. Monarch ist das umfassendere Finanz-Dashboard. Mit beiden wären viele Menschen gut bedient.",
+      "faq": {
+        "q1": "Ist Monarch Money ein guter Mint-Ersatz?",
+        "a1": "Es ist die App, bei der die meisten früheren Mint-Nutzer gelandet sind, und das aus gutem Grund – sie deckt dasselbe Feld ab und mehr, samt Budgets, Vermögensübersicht und Anlagekonten. Wenn Ihnen an Mint das vollständige Dashboard fehlt, ist Monarch die nähere Entsprechung. Wenn Ihnen fehlt, dass Mint kostenlos war: Das ist keine der beiden.",
+        "q2": "Können mein Partner und ich Nels gemeinsam nutzen?",
+        "a2": "Ja, mit je eigenem Zugang und eigenen Berechtigungen, dazu ein Protokoll jeder Änderung, die einer von Ihnen vornimmt. Auch Monarch unterstützt Haushalte, mit mehr Mitwirkenden, als Nels zulässt. Abzuwägen ist der Prüfpfad: Nels hält fest, wer eine Kategorie oder eine Transaktion bearbeitet hat, und in Monarchs eigener Dokumentation haben wir dazu keine Entsprechung gefunden.",
+        "q3": "Verbindet sich Nels mit meiner Bank wie Monarch?",
+        "a3": "Im Pro-Tarif ja. Im Einstiegstarif nicht – dort sagen Sie Nels, was Sie ausgegeben haben, und das ist der Kompromiss, den der dialogbasierte Ansatz eingeht. Monarch enthält die Synchronisierung in jedem Tarif; wenn ein automatischer Abgleich für Sie unverzichtbar ist, rechnen Sie diesen Tarifunterschied in den Preisvergleich oben ein."
+      }
+    },
+    "simplifi": {
+      "seo": {
+        "title": "Nels vs. Quicken Simplifi: Chat oder Dashboard",
+        "description": "Simplifi liegt preislich mit am nächsten an Nels, Kosten entscheiden also nicht. Quickens Auswertungen gehen tiefer; Nels erfasst Ausgaben im Gespräch."
+      },
+      "headline": "Nels im Vergleich zu Quicken Simplifi",
+      "intro": "Simplifi ist Quickens moderne, schlanke Budget-App und eine der wenigen hier verglichenen Apps, deren Preis überhaupt in die Nähe von Nels kommt. Damit fällt das übliche Argument weg. Übrig bleibt ein schlichter Unterschied darin, wie beide Sie arbeiten lassen wollen: Simplifi ist ein gut geordnetes Dashboard mit Ausgabenplan und Auswertungen; Nels ist ein Gespräch, das nebenbei ein Kassenbuch führt.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Wenn Sie Dashboards mögen – Beobachtungslisten, Auswertungen, ein Ausgabenplan, den Sie prüfen und anpassen –, ist Simplifi eine aufgeräumte, leistungsfähige Variante davon, getragen von einem Unternehmen, das seit Jahrzehnten Finanzsoftware baut. Wenn das Öffnen eines Dashboards der Schritt ist, zu dem Sie nie ganz kommen, verlangt Nels stattdessen einen Satz und erledigt die Umschlagrechnerei dahinter.",
+      "strengthTitle": "Was Quicken Simplifi besser macht",
+      "strength": "Quicken hat eine lange Geschichte in der Finanzsoftware, und Simplifi erbt sie: Die Auswertungen gehen tiefer als unsere, Ausgabenplan und Beobachtungslisten sind durchdacht gebaut, und die Bankanbindung ist enthalten, statt wie bei Nels einem höheren Tarif vorbehalten zu sein. Die Anlagenverfolgung deckt zudem Bereiche ab, die Nels gar nicht berührt. Bei Auswertungstiefe und institutioneller Beständigkeit ist Simplifi die etabliertere Wahl, und das ist ein vernünftiger Wunsch an etwas, dem man seine Finanzen anvertraut.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Entscheiden Sie hier nicht über den Preis – die beiden liegen so nah beieinander, dass er nicht den Ausschlag geben sollte, und Simplifi gewährt obendrein einen Rabatt im ersten Jahr. Nehmen Sie Simplifi, wenn Sie tiefere Auswertungen und ein ausgereiftes Dashboard von einem alteingesessenen Unternehmen wollen. Nehmen Sie Nels, wenn Sie Ausgaben im Gespräch erfassen wollen, ein Haushaltsbudget mit Protokoll darüber brauchen, wer was geändert hat, und damit leben können, dass die Bankanbindung ein kostenpflichtiges Upgrade ist. Anzumerken ist außerdem: Simplifis Freigabe umfasst eine weitere Person, während Nels für einen ganzen Haushalt gebaut ist.",
+      "faq": {
+        "q1": "Ist Nels günstiger als Quicken Simplifi?",
+        "a1": "Etwas, aber der Abstand ist hier einer der geringsten auf dieser Seite, und Simplifi verbilligt das erste Jahr zusätzlich. Die Tabelle oben führt die aktuellen Listenpreise von Quickens eigener Seite — beachten Sie, dass Simplifis Monatsbetrag der Rate bei jährlicher Abrechnung entspricht, denn Quicken verkauft es nicht monatsweise. Der Preis ist ein schwaches Argument, um zwischen diesen beiden zu wählen.",
+        "q2": "Macht Quicken Simplifi Umschlag-Budgetierung?",
+        "a2": "Es hat einen Ausgabenplan, der Ihr Einkommen auf Kategorien verteilt – dieselbe Idee unter anderem Namen, insofern ist das kein Unterschied zwischen beiden. Beide Apps sagen Ihnen, was in einer Kategorie noch übrig ist, bevor Sie daraus ausgeben.",
+        "q3": "Kann ich Quicken Simplifi mit meiner Familie teilen?",
+        "a3": "Sie können eine weitere Person hinzufügen – die Partnerin, den Partner oder eine Person aus der Finanzberatung. Wenn Ihr Haushalt größer als zwei ist oder jede Person eigene Berechtigungen und ein Protokoll ihrer Änderungen haben soll, unterscheiden sich die beiden Apps wirklich."
+      }
+    },
+    "everydollar": {
+      "seo": {
+        "title": "Nels vs. EveryDollar: kostenlos, aber manuell",
+        "description": "EveryDollars Gratis-Tarif ist echt, die Bankanbindung aber kostenpflichtig. Nels liegt dazwischen: Sagen Sie, was Sie ausgegeben haben."
+      },
+      "headline": "Nels im Vergleich zu EveryDollar",
+      "intro": "EveryDollar ist die Budget-App rund um die Ramsey-Methode, und sie passt gut zu dieser Methode – nullbasiert, Kategorie zuerst, bewusst einfach. Wenn die Baby Steps Ihre Art sind, über Geld nachzudenken, zählt diese Passung sehr viel, und nichts hier spricht dagegen. Die praktische Frage, mit der die meisten kommen, ist enger gefasst: Im Gratis-Tarif muss jede Transaktion von Hand eingetragen werden, und der Tarif, der das Tippen abnimmt, kostet ein gutes Stück mehr als Nels.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Wenn Sie dem Ramsey-Plan folgen und ein Budget wollen, das ihm Schritt für Schritt entspricht, mitsamt Coaching und Community, ist EveryDollar das natürliche Zuhause, und Nels ersetzt das nicht. Wenn Sie im Gratis-Tarif budgetieren und das Tippen von Hand Sie zermürbt, ist Nels die mittlere Option – Sie sagen in einem Satz, was Sie ausgegeben haben, und es wird erfasst, ohne dass Sie für eine vollständige Bankanbindung zahlen.",
+      "strengthTitle": "Was EveryDollar besser macht",
+      "strength": "EveryDollar hat einen wirklich kostenlosen Tarif, den Sie unbegrenzt nutzen können; Nels bietet so etwas gar nicht an – für manche ist die Frage damit schon entschieden. Darum herum liegt das gesamte Ramsey-Ökosystem: Einzel- und Gruppencoaching, wöchentliche Live-Trainings, ein Schuldentilgungs-Tracker und eine große Community, die denselben Plan verfolgt. Nels hat dazu kein Gegenstück und überhaupt kein Coaching. Wenn Sie die Methode und die Unterstützung drumherum suchen, bringt EveryDollar beides mit.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Wenn kostenlos das ist, was Sie brauchen, gewinnt EveryDollar klar, und Sie sollten es nutzen. Wenn Sie für sich schon entschieden haben, dass Eintragen von Hand auf Dauer nicht trägt, geht die eigentliche Wahl darum, für EveryDollars Premium-Tarif zu zahlen und automatische Synchronisierung zu bekommen – oder deutlich weniger für Nels zu zahlen, wo Sie im Gespräch erfassen und die Bankanbindung später im Pro-Tarif ergänzen können. Beide Apps beherrschen nullbasiertes Budgetieren. Der Unterschied liegt darin, wie sich das Erfassen der Transaktionen anfühlt und was es Sie kostet.",
+      "faq": {
+        "q1": "Ist EveryDollar wirklich kostenlos?",
+        "a1": "Ja, und nicht nur als Testphase – den Gratis-Tarif können Sie so lange nutzen, wie Sie wollen. Nicht enthalten ist die Bankanbindung, jede Transaktion wird also von Hand eingetragen. Der Premium-Tarif ergänzt die automatische Synchronisierung sowie Coaching, wöchentliche Trainings und den Schuldentilgungs-Tracker.",
+        "q2": "Funktioniert Nels mit der Ramsey-Methode?",
+        "a2": "Der Budgetteil passt sauber. Nels ist nullbasiert und umschlagorientiert, jeden Betrag vor Monatsbeginn in eine Kategorie einzuplanen funktioniert also genau so, wie Sie es erwarten würden. Was Nels nicht bietet, ist der weitere Plan – die Baby Steps, das Coaching, die Werkzeuge für den Schuldenschneeball. Dafür sind EveryDollar und das Ramsey-Material drumherum der richtige Ort.",
+        "q3": "Was bedeutet dialogbasiertes Erfassen konkret?",
+        "a3": "Sie schreiben in normaler Sprache, was passiert ist – dass Sie dreißig für Lebensmittel ausgegeben haben –, und Nels ordnet es einer Kategorie zu und schreibt es ins Kassenbuch. Das geht schneller, als ein Formular auszufüllen, und es verlangt keine Bankzugangsdaten; deshalb liegt es zwischen EveryDollars Eingabe von Hand und dessen kostenpflichtiger Synchronisierung."
+      }
+    },
+    "range": {
+      "seo": {
+        "title": "Nels vs. Range: Budget-App oder Vermögensteam",
+        "description": "Range ist Vermögensverwaltung zum Pauschalhonorar, mit CFPs, Steuer- und Nachlassplanung für Gutverdiener. Nels ist ein Haushaltsbudget."
+      },
+      "headline": "Nels im Vergleich zu Range",
+      "intro": "Das sind keine konkurrierenden Produkte, und eine Seite, die etwas anderes vorgäbe, wäre Ihre Zeit nicht wert. Range ist ein Vermögensverwaltungsdienst: ein Team aus zertifizierten Finanzplanern, Steuerfachleuten und Fachleuten für Aktienvergütung, verkauft zu einem pauschalen Jahreshonorar, ohne Prozentanteil an Ihrem Vermögen. Nels ist eine Budget-App für ein paar Dollar im Monat. Wenn Sie die beiden vergleichen, dann fast sicher deshalb, weil Sie noch nicht entschieden haben, welche Art von Sache Sie überhaupt brauchen.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Range sagt klar, für wen es gedacht ist: Haushalte mit mehr als zweihunderttausend Jahreseinkommen und den Verwicklungen, die damit einherzugehen pflegen – Aktienvergütung, mehrere Einkommensquellen, Nachlassdokumente, eine Steuerlage, in der sich Planung auszahlt. Nels ist für einen Haushalt, der vor dem Wochenende wissen will, was in der Kategorie Lebensmittel noch übrig ist. Das sind unterschiedliche Aufgaben, und die zweite setzt die erste nicht voraus.",
+      "strengthTitle": "Was Range besser macht",
+      "strength": "In seiner eigenen Kategorie fast alles, denn Nels versucht davon nichts. Range gibt Ihnen menschliche, treuhänderisch verpflichtete Berater, mit denen Sie tatsächlich sprechen können, dazu Portfolioverwaltung, Steuerplanung und -prognosen, im höchsten Tarif die Steuererklärung, das Erstellen von Nachlassdokumenten und eine Strategie für Aktienoptionen und RSUs. Nels hat keine Berater, keine Vermögensverwaltung und keinerlei Steuerfunktionen. Wenn Ihre Steuerlage komplex ist, ist eine Budget-App nicht die Antwort darauf, und wir werden auch nicht behaupten, sie wäre es.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Ergänzend, und für andere Käufer. Wenn Ihre Finanzen kompliziert genug für echte Planung sind, engagieren Sie die Planer – Ranges Honorar ist pauschal und transparent, und bei dieser Komplexität ist der Nutzen real. Wenn Ihr Problem darin besteht, dass Ihnen der Monat immer wieder entgleitet, ist ein Vermögensverwaltungsmandat ein teurer Weg dorthin, und Nels kostet im Vergleich einen Rundungsfehler. Manche werden sinnvollerweise beides wollen: Range für die Strategie, etwas wie Nels für den Alltag. Was wir Ihnen nicht erzählen werden, ist, dass das eine das andere ersetzt.",
+      "faq": {
+        "q1": "Ersetzt Range eine Budget-App?",
+        "a1": "Nicht wirklich, und es tritt auch nicht mit diesem Anspruch an. Range enthält zwar Budget- und Liquiditätswerkzeuge als Teil eines viel breiteren Dienstes, sein Schwerpunkt liegt aber bei Anlagen, Steuern und langfristiger Planung. Wenn Sie die alltäglichen Ausgaben in den Griff bekommen wollen, ist das nur ein kleiner Teil dessen, wofür Sie zahlen würden.",
+        "q2": "Ist Nels eine Alternative zum Finanzberater?",
+        "a2": "Nein. Nels hat keine menschlichen Berater und gibt überhaupt keine Finanz-, Steuer- oder Anlageberatung. Es hilft einem Haushalt, seine Ausgaben zu planen und zu verfolgen. Wenn Sie Beratung brauchen, brauchen Sie Berater, und Range ist ein Weg, gleich mehrere davon zu bekommen, ohne jedes Jahr einen Prozentsatz Ihres Vermögens abzugeben.",
+        "q3": "Was bedeutet null Prozent AUM, und warum erwähnt Range das?",
+        "a3": "Gebühren auf das verwaltete Vermögen, kurz AUM, sind die klassische Art, wie Berater abrechnen – ein Prozentsatz Ihres Portfolios pro Jahr, der mit Ihrem Vermögen wächst. Range verlangt stattdessen ein pauschales Jahreshonorar, was bei einem größeren Portfolio einen spürbaren Unterschied macht und ein fairer Punkt zu seinen Gunsten ist. Auf die Preisgestaltung von Nels hat das keinen Einfluss, denn Nels verwaltet kein Vermögen."
+      }
+    },
+    "boldin": {
+      "seo": {
+        "title": "Nels vs. Boldin: Ruhestandsplan oder Monatsbudget",
+        "description": "Boldin rechnet Jahrzehnte voraus, mit Monte Carlo und Roth-Umwandlungen. Nels führt das Budget dieses Monats. Andere Zeithorizonte, keine Rivalen."
+      },
+      "headline": "Nels im Vergleich zu Boldin",
+      "intro": "Boldin – früher NewRetirement – ist Software für die Ruhestandsplanung. Sie modelliert Jahrzehnte: Simulationen nach Monte Carlo für Ihre Ersparnisse, den richtigen Zeitpunkt für eine Umwandlung in einen Roth, aus welchen Konten zuerst zu entnehmen ist, ob die Rechnung noch aufgeht, wenn Sie mit zweiundsechzig aufhören zu arbeiten. Nels ist ein Budget für den Monat, in dem Sie gerade stecken. Bei beiden geht es um Geld. Sie beantworten aber nicht dieselbe Frage.",
+      "whoForTitle": "Für wen die beiden gedacht sind",
+      "whoFor": "Boldin ist für jemanden, der genug angespart hat, um eine Ruhestandsfrage zu haben, die sich zu modellieren lohnt, und der sie lieber selbst beantwortet, als sie einem Berater zu übergeben. Nels ist für einen Haushalt, der zwischen zwei Gehaltseingängen aufhören will, zu viel auszugeben. Das Erste ist eine Entscheidung, die Sie ein paar Mal im Jahr überprüfen; das Zweite fassen Sie an den meisten Tagen der Woche an.",
+      "strengthTitle": "Was Boldin besser macht",
+      "strength": "Seine Prognose-Engine, und zwar vollständig. Analysen nach Monte Carlo, Umwandlungen in einen Roth Jahr für Jahr durchgerechnet, die Reihenfolge der Entnahmen und Steueroptimierung über einen ganzen Ruhestand hinweg – Nels versucht davon nichts, und seine eigene Zeile in der Tabelle oben sagt das auch. Boldin hat außerdem einen kostenlosen Tarif, den Nels nicht hat, und die Möglichkeit, gegen ein Pauschalhonorar einen zertifizierten Finanzplaner mit CFP-Titel hinzuzuziehen, wenn Sie die Schlüsse der Software von einem Menschen prüfen lassen wollen. Bei der langfristigen Planung gibt es keinen Wettstreit, weil Nels gar nicht antritt.",
+      "verdictTitle": "Das ehrliche Fazit",
+      "verdict": "Ergänzend, auf unterschiedlichen Zeithorizonten. Boldin sagt Ihnen, ob Sie mit zweiundsechzig in Rente gehen können; Nels ist der Grund, warum Sie im Juli nicht zu viel ausgeben. Zu wissen, dass Ihr Plan ein schlechtes Jahrzehnt übersteht, hält das Lebensmittelbudget nicht im Zaum, und ein sauberer Monat sagt nichts darüber, ob Ihre Sparquote reicht. Wenn Sie nur eines wählen können, wählen Sie nach dem Problem, das Sie gerade wirklich Geld kostet: dem fernen oder dem nahen.",
+      "faq": {
+        "q1": "Ist Boldin dasselbe wie NewRetirement?",
+        "a1": "Ja – das Unternehmen hat sich in Boldin umbenannt, und die Software stammt aus derselben Linie. Die juristische Person ist weiterhin NewRetirement, Inc., die als Boldin auftritt; deshalb taucht der alte Name in Suchergebnissen immer wieder auf.",
+        "q2": "Macht Nels Ruhestandsprognosen?",
+        "a2": "Nein, und es tut auch nicht so. Nels verfolgt und plant laufende Ausgaben. Es gibt keine Simulation nach Monte Carlo, keine Entnahmestrategie, keine Modellierung von Umwandlungen in einen Roth. Wenn Sie danach suchen, ist Boldin ein weit besserer Einsatz Ihres Geldes als jede Budget-App, diese eingeschlossen.",
+        "q3": "Könnte ich beides nutzen?",
+        "a3": "Das ist ein vernünftiges Vorgehen und wohl die ehrlichste Antwort hier. Boldin für den langfristigen Plan, überprüft, wenn sich etwas ändert; ein Budget wie Nels für die monatliche Umsetzung, die entscheidet, wie viel tatsächlich bei den Ersparnissen ankommt, die der Plan voraussetzt. Boldins kostenloser Tarif macht es günstig, diese Kombination auszuprobieren."
+      }
+    }
+  },
+  "about": {
+    "seo": {
+      "title": "Über uns",
+      "description": "Nels hilft Menschen, ihr Geld im Gespräch, sicher und gemeinsam zu verwalten."
+    },
+    "title": "Über Nels",
+    "body": "Nels ist da, um das Budgetieren modern zu machen: Geld im Gespräch, sicher und gemeinsam verwalten. Wir setzen auf Datenschutz, halten die Oberfläche menschlich und sind ehrlich darüber, was das Produkt heute kann und was nicht – unsere Einblicke werden mit der Zeit besser."
+  },
+  "faq": {
+    "seo": {
+      "title": "FAQ",
+      "description": "Häufige Fragen zu Nels: Preise, Sicherheit, Freigabe und die kostenlose Testphase."
+    },
+    "title": "Häufig gestellte Fragen",
+    "q1": "Was ist Nels?",
+    "a1": "Ein dialogbasierter KI-Co-Pilot fürs Budgetieren: Budgets festlegen, Ausgaben per Chat erfassen, Ausgaben analysieren und Ziele verfolgen.",
+    "q2": "Bieten Sie Finanz- oder Anlageberatung an?",
+    "a2": "Nein. Nels bietet auf Ihren Daten basierende, persönliche Ausgabeneinblicke, ist aber kein registrierter Finanzberater.",
+    "q3": "Sind meine Daten sicher?",
+    "a3": "Ja. Nels nutzt die passwortlose Anmeldung per Authenticator-App und verschlüsselt Daten bei der Übertragung. Wir verkaufen Ihre Daten nicht.",
+    "q4": "Kann ich mein Budget teilen?",
+    "a4": "Ja – laden Sie Personen per E-Mail mit Lese-, Bearbeitungs- oder Eigentümerrechten ein. Jede Änderung wird in einem Änderungsprotokoll festgehalten.",
+    "q5": "Wie funktioniert die kostenlose Testphase?",
+    "a5": "Testen Sie Nels {days} Tage lang kostenlos, ohne Kreditkarte. Danach kostet es {monthly}/Monat oder {annual}/Jahr, und Sie können jederzeit kündigen."
+  }
+}

@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 300" width="240" height="300">
+  <rect width="240" height="300" fill="#ffffff"/>
+  <g fill="none" stroke="#111111" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- ===== HAT ===== -->
+    <!-- Tall hat with curled tip -->
+    <path d="M78 92
+             C 92 64, 104 44, 120 36
+             C 138 27, 150 34, 138 50
+             C 130 60, 122 64, 126 50
+             C 128 42, 136 40, 140 44"
+          fill="#ffffff"/>
+    <!-- Hat body -->
+    <path d="M78 92
+             C 86 70, 100 50, 120 38
+             C 128 56, 140 80, 162 96
+             Z"
+          fill="#ffffff"/>
+    <!-- Hat brim -->
+    <path d="M70 96
+             C 92 86, 142 86, 170 96
+             C 160 104, 150 106, 120 106
+             C 96 106, 80 104, 70 96 Z"
+          fill="#ffffff"/>
+
+    <!-- ===== FACE ===== -->
+    <!-- Head outline (cheeks) -->
+    <path d="M84 106
+             C 80 122, 82 134, 90 142
+             M156 106
+             C 160 122, 158 134, 150 142"
+          fill="none"/>
+
+    <!-- Glasses / eyes (two solid round eyes with a bridge) -->
+    <circle cx="105" cy="125" r="8.5" fill="#111111" stroke="none"/>
+    <circle cx="135" cy="125" r="8.5" fill="#111111" stroke="none"/>
+    <path d="M113 124 C 117 120, 123 120, 127 124" stroke-width="5"/>
+    <!-- brows -->
+    <path d="M95 114 C 100 111, 110 112, 114 116" stroke-width="5"/>
+    <path d="M145 114 C 140 111, 130 112, 126 116" stroke-width="5"/>
+
+    <!-- Nose -->
+    <path d="M120 132 C 117 139, 118 145, 120 147 C 122 145, 123 139, 120 132" fill="#111111" stroke="none"/>
+
+    <!-- ===== ROBE / GOWN (drawn first, beard sits on top) ===== -->
+    <!-- Flaring wizard gown: narrow shoulders, wide hem -->
+    <path d="M98 158
+             C 84 178, 72 224, 64 272
+             C 90 280, 150 280, 176 272
+             C 168 224, 156 178, 142 158"
+          fill="#ffffff"/>
+    <!-- Hem scallops -->
+    <path d="M70 268 C 84 262, 96 262, 108 268 C 120 262, 132 262, 144 268 C 156 262, 166 264, 174 270" stroke-width="4"/>
+
+    <!-- Left draped sleeve: shoulder fold down to a cuff with a peeking hand -->
+    <path d="M92 168
+             C 80 182, 74 208, 78 240
+             C 84 252, 96 252, 100 240" fill="#ffffff"/>
+    <path d="M80 238 C 86 244, 94 244, 100 238" stroke-width="4"/>
+    <!-- Right draped sleeve -->
+    <path d="M148 168
+             C 160 182, 166 208, 162 240
+             C 156 252, 144 252, 140 240" fill="#ffffff"/>
+    <path d="M140 238 C 146 244, 154 244, 160 238" stroke-width="4"/>
+
+    <!-- ===== BEARD (long, pointed, on top of robe) ===== -->
+    <path d="M88 150
+             C 80 176, 84 196, 92 214
+             C 100 232, 110 248, 120 258
+             C 130 248, 140 232, 148 214
+             C 156 196, 160 176, 152 150"
+          fill="#ffffff"/>
+    <!-- beard strands -->
+    <path d="M120 162 C 119 190, 120 220, 120 250" stroke-width="4"/>
+    <path d="M104 158 C 102 184, 106 206, 112 226" stroke-width="3"/>
+    <path d="M136 158 C 138 184, 134 206, 128 226" stroke-width="3"/>
+
+    <!-- ===== MUSTACHE (on top of beard) ===== -->
+    <path d="M120 150
+             C 108 156, 96 158, 86 151
+             C 82 162, 88 172, 100 170
+             C 110 168, 116 160, 120 153
+             C 124 160, 130 168, 140 170
+             C 152 172, 158 162, 154 151
+             C 144 158, 132 156, 120 150 Z"
+          fill="#ffffff"/>
+
+    <!-- ===== STAFF ===== -->
+    <line x1="62" y1="86" x2="48" y2="276"/>
+    <!-- Spearhead -->
+    <path d="M55 86 C 50 70, 58 58, 64 50 C 70 60, 72 74, 67 88" fill="#ffffff"/>
+    <path d="M48 78 C 56 74, 60 72, 64 64" stroke-width="4"/>
+
+    <!-- ===== SPARKLE STARS ===== -->
+    <g stroke-width="4">
+      <path d="M186 96 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4 z" fill="#111111" stroke="none"/>
+      <path d="M64 132 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z" fill="#111111" stroke="none"/>
+      <path d="M92 80 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z" fill="#111111" stroke="none"/>
+      <path d="M178 168 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3 z" fill="#111111" stroke="none"/>
+      <path d="M60 210 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z" fill="#111111" stroke="none"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,17 @@
+{
+  "name": "nels",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Root dev orchestration for the Nels apps. The frontend, admin, and marketing apps stay independent (each keeps its own pnpm-lock.yaml so its Cloudflare Pages build is unaffected); this package only fans a single command out to all three.",
+  "scripts": {
+    "dev": "concurrently -k -n frontend,admin,marketing -c green,magenta,cyan \"pnpm -C frontend dev\" \"pnpm -C admin dev\" \"pnpm -C marketing exec vite dev --port 5175\"",
+    "dev:frontend": "pnpm -C frontend dev",
+    "dev:admin": "pnpm -C admin dev",
+    "dev:marketing": "pnpm -C marketing exec vite dev --port 5175",
+    "install:all": "pnpm -C frontend install && pnpm -C admin install && pnpm -C marketing install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

@@ -1,0 +1,36 @@
+# Bacon configuration for the Nels backend.
+#
+# The default job (`run`) builds and launches the Axum server, then rebuilds
+# and restarts it automatically whenever a source file changes — so the
+# running binary never goes stale against the source.
+#
+#   cd backend && bacon          # auto-restarting dev server (default job)
+#   cd backend && bacon check    # fast type-check loop
+#   cd backend && bacon clippy   # lint loop
+#   cd backend && bacon test     # test loop
+#
+# Built-in jobs (check, clippy, test, doc, ...) remain available; the jobs
+# below either override them or add the long-running server job.
+
+default_job = "run"
+
+# Long-running server: on any change, kill the running server and start it
+# again with the freshly compiled binary.
+[jobs.run]
+command = ["cargo", "run"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+
+[jobs.check]
+command = ["cargo", "check", "--color", "always"]
+need_stdout = false
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--color", "always"]
+need_stdout = false
+
+[jobs.test]
+command = ["cargo", "test", "--color", "always", "--", "--nocapture"]
+need_stdout = true

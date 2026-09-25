@@ -1,0 +1,90 @@
+<!--
+  DRAFT — generated to reflect Nels's actual data flows (AI processing,
+  Stripe billing, Stripe Financial Connections bank linking, Fly.io hosting,
+  email-based sharing, TOTP auth).
+  Have a lawyer review before relying on this for a public launch. A personal-finance
+  app handling financial data should not ship boilerplate unreviewed.
+-->
+<script>
+  import Seo from '$lib/components/Seo.svelte';
+  import Section from '$lib/components/Section.svelte';
+  import { SITE } from '$lib/site.js';
+
+  const updated = 'July 7, 2026';
+</script>
+
+<Seo
+  title="Privacy Policy"
+  path="/privacy"
+  localized={false}
+  description="How Nels collects, uses, and protects your data — including how your budget data is processed by AI, who our subprocessors are, and your rights over your information."
+/>
+
+<Section classes="max-w-2xl">
+  <h1 class="text-4xl font-bold">Privacy Policy</h1>
+  <p class="mt-2 text-sm opacity-60">Last updated: {updated}</p>
+
+  <div class="prose mt-6 max-w-none opacity-90">
+    <p>{SITE.name} is operated by Savvagent, LLC. This Privacy Policy explains what information we collect when you use our budgeting app and website, how we use it, who we share it with, and the choices you have. By using {SITE.name}, you agree to this policy.</p>
+
+    <h2>Information we collect</h2>
+    <ul>
+      <li><strong>Account information.</strong> Your email address and the credentials for your authenticator app (we store a secret used to verify your time-based one-time passwords, encrypted at rest; we never store a reusable password).</li>
+      <li><strong>Budget data you provide.</strong> Budgets, categories, limits, expenses, income, savings goals, collaborators, and the messages you send to the {SITE.name} assistant.</li>
+      <li><strong>Payment information.</strong> When you subscribe, payment is processed by our payment provider (Stripe). We receive billing status and the last four digits of your card; we do not store full card numbers.</li>
+      <li><strong>Bank account data (optional, Pro).</strong> If you choose to link a bank account, we receive information about that account through Stripe Financial Connections — the institution name, account name and type, a masked account number, and transaction history (dates, amounts, and descriptions). We never see or store your bank login credentials; you authenticate directly with your bank through Stripe.</li>
+      <li><strong>Technical data.</strong> Standard server logs (such as IP address, browser type, and timestamps) needed to operate and secure the service.</li>
+    </ul>
+
+    <h2>How we use your information</h2>
+    <ul>
+      <li>To provide the core service — storing your budgets, parsing expenses, and answering your questions.</li>
+      <li>To generate AI insights, forecasts, and categorizations from the data you provide.</li>
+      <li>To automatically import transactions from bank accounts you link, keep them up to date, and include them in your budgets and insights.</li>
+      <li>To authenticate you, enable sharing, and maintain the collaboration audit log.</li>
+      <li>To process subscriptions and prevent fraud and abuse.</li>
+      <li>To communicate with you about your account and respond to support requests.</li>
+    </ul>
+
+    <h2>AI processing</h2>
+    <p>{SITE.name} uses third-party large-language-model providers — currently Google's Gemini API, and potentially other AI providers over time — to interpret your messages and generate responses, categorizations, and insights. To do this, the relevant budget data and conversation content are sent to the provider for processing. We send only what is needed to answer your request, and we do not permit these providers to use your data to train their models beyond what is necessary to return a response. We do not sell your data and we do not build advertising profiles.</p>
+
+    <h2>Who we share data with</h2>
+    <p>We do not sell your personal information. We share data only with service providers ("subprocessors") that help us run {SITE.name}, under contracts that limit their use of it:</p>
+    <ul>
+      <li><strong>AI providers (currently Google's Gemini API)</strong> — AI processing of your prompts and budget context.</li>
+      <li><strong>Stripe</strong> — subscription billing, payment processing, and bank account connections (Stripe Financial Connections). When you link a bank account, you interact with Stripe directly and Stripe collects information from you and your financial institution under its own <a href="https://stripe.com/privacy">privacy policy</a>. If we add bank connections for other regions, we will use comparable regulated providers and update this policy.</li>
+      <li><strong>Fly.io</strong> — application hosting.</li>
+      <li><strong>Managed PostgreSQL hosting</strong> — storage of your account and budget data, encrypted at rest.</li>
+    </ul>
+    <p>We may also disclose information if required by law, or to protect the rights, safety, and security of our users and the service.</p>
+
+    <h2>Sharing and collaboration</h2>
+    <p>When you invite someone to a budget by email, the data in that budget becomes visible to them according to the permission you grant (view, edit, or owner). You are responsible for who you invite. Every change to a shared budget is recorded in an audit log visible to collaborators.</p>
+
+    <h2>Data retention and deletion</h2>
+    <p>We keep your data for as long as your account is active. You can delete individual budgets at any time, and you can delete your account, which removes your personal data and budget content from active systems. Residual copies may remain in encrypted backups for a limited period before being overwritten, and we may retain limited records where required for legal, tax, or fraud-prevention purposes.</p>
+    <p>You can unlink a bank account at any time from the Accounts page. Unlinking revokes our access to that account through Stripe and stops all future imports. Transactions already imported remain part of your budget — like any other budget data, you can delete them individually, with their budget, or by deleting your account.</p>
+
+    <h2>Security</h2>
+    <p>Sign-in is passwordless and based on TOTP authenticator apps, so there is no reusable password to leak. Your authenticator secret — the only credential that can sign you in — is encrypted at rest at the application layer (AES-256-GCM), so it is never stored in a readable form. Your account and budget data are encrypted at rest by our managed database host and encrypted in transit (HTTPS everywhere). No system is perfectly secure, but we take reasonable measures to protect your information and design the product to minimize what we collect.</p>
+
+    <h2>Your rights</h2>
+    <p>Depending on where you live, you may have the right to access, correct, export, or delete your personal data, and to object to or restrict certain processing. You can exercise most of these directly in the app, or by contacting us at <a href={`mailto:${SITE.supportEmail}`}>{SITE.supportEmail}</a>. We will not discriminate against you for exercising these rights.</p>
+
+    <h2>Children</h2>
+    <p>{SITE.name} is not directed to children and is not intended for anyone under 16. We do not knowingly collect data from children. If you believe a child has provided us data, contact us and we will delete it.</p>
+
+    <h2>International transfers</h2>
+    <p>Our service providers may process data in countries other than your own. Where required, we rely on appropriate safeguards for those transfers.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>We may update this policy from time to time. When we make material changes, we will update the date above and, where appropriate, notify you.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy or your data? Email us at <a href={`mailto:${SITE.supportEmail}`}>{SITE.supportEmail}</a>, or write to us at:</p>
+    <p>Savvagent, LLC<br />707 W Halvorsen Parkway<br />Saratoga Springs, Utah 84045</p>
+
+    <p class="text-sm opacity-70"><em>{SITE.name} provides general budgeting tools, not financial advice.</em></p>
+  </div>
+</Section>

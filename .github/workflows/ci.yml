@@ -1,0 +1,497 @@
+# This workflow is NOT release-gated. The four deploy-*.yml workflows only fire
+# when release-please cuts a release, or via a manual workflow_dispatch override.
+# This one runs on every pull request and on every push to main.
+#
+# It exists because, before savvagent/nels#462, nothing in CI executed any test
+# suite at all. The concrete failure mode that motivated it is a locale-parity
+# regression in frontend/src/lib/i18n/locales/*.json:
+#
+#   - frontend/src/lib/i18n/index.js calls init({ fallbackLocale: "en", ... }),
+#     so a key missing from de/es/fr/it/pt silently renders the ENGLISH string
+#     rather than a visible raw key path. There is nothing to notice in the UI.
+#   - `pnpm build` never validates locale content. The JSON is statically
+#     imported and IS bundled at build time, but svelte-i18n resolves key
+#     LOOKUPS at runtime, and nothing anywhere compares the key sets. A green
+#     build is therefore not evidence that the locales are in parity.
+#
+# The parity assertions live in the vitest suites, so the only way to catch this
+# class of regression is to actually run the suites in CI.
+#
+# COVERAGE CAVEAT, so this gate is not over-trusted: the parity assertions in
+# frontend/src/lib/i18nLocales.test.js guard 5 of en.json's 25 top-level
+# namespaces. Drift in the other 20 is still undetected. Tracked as
+# savvagent/nels#482.
+#
+# ENFORCEMENT CAVEAT: this workflow REPORTS, it cannot BLOCK. See the `ci` job.
+#
+# Ref: savvagent/nels#462
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  # pull-requests: read is REQUIRED, not boilerplate. The `changes` job below
+  # calls `gh api repos/.../pulls/<n>/files`, which needs it. Trimming this to
+  # `contents: read` alone — as all four deploy-*.yml correctly do, since they
+  # make no such call — breaks change detection.
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # cancel-in-progress is deliberately CONDITIONAL, unlike the plain `true` in
+  # three of the four deploy-*.yml. Do not "make it match the others". Superseded
+  # pull request runs are worth cancelling; superseded MAIN runs are not, because
+  # a main run is the only thing that warms the cargo cache — see the `changes`
+  # job. Back-to-back merges would otherwise cancel the very run doing that work.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Decide which of the three suites need to run for this event.
+  #
+  # There is no pnpm workspace in this repo — each app keeps its own
+  # pnpm-lock.yaml deliberately, so that each Cloudflare Pages build stays
+  # independent. That means CI installs per app, and it is worth skipping the
+  # apps a PR does not touch.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      marketing: ${{ steps.filter.outputs.marketing }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      # CRITICAL — this MUST stay a SINGLE step with a SINGLE id that branches
+      # internally on the event name, and that writes all three outputs on BOTH
+      # branches. Do NOT split it into a push-step and a pull_request-step with
+      # different ids gated by `if:`.
+      #
+      # Why: a skipped step still resolves through steps.<id>.outputs.*, but it
+      # contributes EMPTY STRINGS. With two gated steps, whichever one did not
+      # run would blank out all three job outputs, every downstream
+      # `if: ... == 'true'` gate would evaluate false, all three suites would
+      # skip, and the aggregate `ci` job below would happily report GREEN. That
+      # is precisely the silently-disappearing-gate failure this workflow was
+      # written to remove, so reintroducing it here would be self-defeating.
+      - name: Determine which suites to run
+        id: filter
+        shell: bash
+        env:
+          # The gh CLI is preinstalled on ubuntu-latest but does NOT authenticate
+          # on its own inside Actions. Without GH_TOKEN the api call below fails.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # Run everything on main, for two independent reasons:
+            #
+            #   1. Post-merge signal on the trunk. A PR is tested against its own
+            #      head, not against the merged result, so main deserves its own
+            #      run.
+            #   2. CARGO cache warming. Actions cache entries are readable only
+            #      from the current branch and from the base/default branch.
+            #      Nothing else in this repo writes a cargo cache on main —
+            #      deploy-backend.yml is a flyctl remote build with no
+            #      actions/cache — so without a run here, the FIRST run of every
+            #      backend-touching PR is a fully cold Rust compile. Note this
+            #      argument applies to the CARGO cache only: the pnpm store IS
+            #      also warmed by the setup-node steps in deploy-frontend.yml,
+            #      deploy-marketing.yml and deploy-admin.yml, but only when a
+            #      release is actually cut, so it cannot be relied on between
+            #      releases.
+            frontend=true
+            marketing=true
+            backend=true
+          else
+            # Note: --paginate on this endpoint tops out at 3000 files. That is an
+            # accepted residual risk — a pull request that large is pathological,
+            # and would have bigger problems than suite selection.
+            files=$(gh api \
+              "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+              --paginate --jq '.[].filename')
+
+            echo "Changed files:"
+            echo "$files"
+
+            # CRITICAL — an EMPTY file list must never be read as "no suites to
+            # run". `jq`'s `.[]` over an empty array emits nothing and exits 0,
+            # so a successful-but-empty API response would otherwise set all
+            # three outputs false, skip all three suites, and let the aggregate
+            # `ci` job report GREEN having executed zero tests. That is the same
+            # bug class the type-check ratchet below refuses to commit when its
+            # summary line is missing, and it gets the same treatment: fail loud.
+            #
+            # Reachable in practice when a head branch is force-pushed back to
+            # base, or on a very fresh PR whose diff is not yet computed.
+            if [ -z "$files" ]; then
+              echo "::error::gh api returned an EMPTY changed-file list for PR #${{ github.event.pull_request.number }}. A pull request always changes at least one file, so this means the API response was unusable. Refusing to interpret 'no files' as 'no suites to run'."
+              exit 1
+            fi
+
+            # CRITICAL — `grep` exits 1 when it matches nothing, and this script
+            # runs under `set -e`. A bare `grep -c` in a command substitution
+            # would therefore ABORT the whole changes job on any PR that does not
+            # touch that directory, which would in turn skip every suite. Always
+            # use the guarded `if grep -q ...; then ...; else ...; fi` form below,
+            # where the non-match is consumed by the `if` and never reaches `set -e`.
+            if grep -q '^frontend/'  <<<"$files"; then frontend=true;  else frontend=false;  fi
+            if grep -q '^marketing/' <<<"$files"; then marketing=true; else marketing=false; fi
+            if grep -q '^backend/'   <<<"$files"; then backend=true;   else backend=false;   fi
+
+            # A change to this workflow forces all three suites on. Without this,
+            # the workflow could never validate itself — least of all on the very
+            # pull request that introduces it, which touches no app directory at
+            # all and would otherwise run nothing.
+            if grep -q '^\.github/workflows/ci\.yml$' <<<"$files"; then
+              echo "ci.yml changed — forcing all suites on so the workflow validates itself"
+              frontend=true
+              marketing=true
+              backend=true
+            fi
+          fi
+
+          # Note: admin/ is deliberately NOT detected here. admin/package.json has
+          # no `test` script, so there is no suite to run, and a PR touching only
+          # admin/ correctly skips all three. This is intentional, not an oversight.
+          #
+          # Known limitation: only `filename` is inspected, not
+          # `previous_filename`, so a file MOVED OUT of frontend/ into a
+          # non-suite directory does not select the frontend suite.
+
+          echo "frontend=$frontend"   >> "$GITHUB_OUTPUT"
+          echo "marketing=$marketing" >> "$GITHUB_OUTPUT"
+          echo "backend=$backend"     >> "$GITHUB_OUTPUT"
+
+          echo "Selected suites: frontend=$frontend marketing=$marketing backend=$backend"
+
+  # The four setup actions mirror .github/workflows/deploy-frontend.yml exactly.
+  # Its remaining Pages-deploy steps are replaced by the repo's documented gates.
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # AGENTS.md records `pnpm build` as the COMPONENT-LEVEL gate for this app:
+      # vitest runs node-env here, so there are no Svelte component tests and a
+      # broken .svelte file is caught by the compiler or by nothing. Without this
+      # step a broken component merges green and fails later at release-gated
+      # deploy time, where the failure is more expensive and already on main.
+      #
+      # No VITE_* env is injected on purpose. This is a COMPILE check, not a
+      # deployable artifact; deploy-frontend.yml owns the real build and its
+      # secrets. Do not copy VITE_STRIPE_PUBLISHABLE_KEY here.
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test
+
+  # The same four setup actions as `frontend` above, differing only in
+  # cache-dependency-path, mirroring .github/workflows/deploy-marketing.yml.
+  # AGENTS.md documents this app's gate as build, then test, then check.
+  marketing:
+    needs: changes
+    if: needs.changes.outputs.marketing == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: marketing
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: marketing/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Hard gate: the marketing suite must pass outright.
+      - name: Unit tests
+        run: pnpm test
+
+      # Ratcheted type-check: pre-existing errors are tolerated, new ones are not.
+      - name: Type-check ratchet
+        shell: bash
+        env:
+          # Count of svelte-check errors on main as of savvagent/nels#462: 5
+          # errors, spread across src/lib/components/schema.js and
+          # src/lib/site.test.js, plus 1 unrelated jsconfig.json warning that this
+          # gate ignores entirely.
+          #
+          # This is a COUNT ratchet, not a per-error gate. Fixing one pre-existing
+          # error while introducing a new one leaves the count at 5 and passes.
+          # That is the accepted reading of "no new errors" here — a per-error
+          # identity gate would be far more machinery than this is worth.
+          MARKETING_CHECK_BASELINE_ERRORS: 5
+          # Smoke floor, NOT a coverage ratchet. svelte-check reports ~4088 files
+          # at present. A run that resolved no project reports 0 FILES and 0
+          # ERRORS, which would otherwise sail through as a clean bill of health
+          # AND emit the notice below asking a human to pin the baseline to 0.
+          # Anything under this floor means the checker did not actually run.
+          MARKETING_CHECK_MIN_FILES: 100
+        run: |
+          set -euo pipefail
+
+          # `|| true` applies ONLY to the capture. pnpm check exits non-zero at
+          # the baseline — there are 5 known errors — so a raw exit code cannot
+          # be the gate. The parsed count is the gate.
+          pnpm check --output machine 2>&1 | tee check.log || true
+
+          # Anchor on the machine-readable summary line, which looks exactly like:
+          #   1785234974964 COMPLETED 4088 FILES 5 ERRORS 1 WARNINGS 3 FILES_WITH_PROBLEMS
+          #
+          # Do NOT use `grep -c ERROR` here: it returns 6 at the current baseline
+          # of 5, because the COMPLETED summary line itself contains "5 ERRORS".
+          # Diagnostic message text is arbitrary source-derived text and could
+          # carry the token too. Separately, messages embed literal \n escapes
+          # rather than real newlines, so one diagnostic is always one physical
+          # line. Only an anchored extraction is trustworthy — the leading ^ and
+          # the timestamp pattern are load-bearing, so that a message string
+          # merely CONTAINING "COMPLETED n FILES n ERRORS" cannot win via tail -1.
+          summary=$(sed -n 's/^[0-9][0-9]* COMPLETED \([0-9][0-9]*\) FILES \([0-9][0-9]*\) ERRORS .*/\1 \2/p' check.log | tail -1)
+
+          # If the COMPLETED summary line is absent, svelte-check crashed or
+          # changed its output format. That is a HARD FAILURE. A missing summary
+          # line must NEVER be silently read as "0 errors" — doing so would turn
+          # a broken type-checker into a green check, which is the exact class of
+          # bug this workflow exists to remove.
+          if [ -z "$summary" ]; then
+            echo "::error::svelte-check produced no COMPLETED summary line. It either crashed or changed its machine output format. Refusing to interpret a missing summary as zero errors. Full log follows."
+            cat check.log
+            exit 1
+          fi
+
+          files_checked=${summary%% *}
+          errors=${summary##* }
+
+          # Belt and braces. The capture groups above are [0-9]+ today, so this
+          # cannot trigger — but `[ "$x" -gt "$y" ]` exits 2 on a non-integer,
+          # and because it sits in an `if` condition, `set -e` does not apply and
+          # status 2 reads as FALSE. Both comparisons below would fall through
+          # and the step would print "passed". The gate must not depend on nobody
+          # ever loosening that regex.
+          if ! [[ "$files_checked" =~ ^[0-9]+$ ]] || ! [[ "$errors" =~ ^[0-9]+$ ]]; then
+            echo "::error::Parsed a non-integer from the svelte-check summary: files='$files_checked' errors='$errors'. Refusing to guess. Full log follows."
+            cat check.log
+            exit 1
+          fi
+
+          if [ "$files_checked" -lt "$MARKETING_CHECK_MIN_FILES" ]; then
+            echo "::error::svelte-check reported only $files_checked files checked, below the floor of $MARKETING_CHECK_MIN_FILES. It resolved no project rather than finding a clean one. Refusing to read this as a passing type-check. Full log follows."
+            cat check.log
+            exit 1
+          fi
+
+          echo "svelte-check checked $files_checked files: $errors errors (baseline: $MARKETING_CHECK_BASELINE_ERRORS)"
+
+          if [ "$errors" -gt "$MARKETING_CHECK_BASELINE_ERRORS" ]; then
+            echo "::error::svelte-check reports $errors errors, above the baseline of $MARKETING_CHECK_BASELINE_ERRORS. This change introduces new type errors. Full log follows."
+            cat check.log
+            exit 1
+          fi
+
+          # Strictly fewer errors than the baseline is a good thing, and must not
+          # fail the pull request. Failing someone for fixing an unrelated
+          # pre-existing error would be user-hostile; just ask for the ratchet to
+          # be tightened.
+          if [ "$errors" -lt "$MARKETING_CHECK_BASELINE_ERRORS" ]; then
+            echo "::notice::svelte-check errors dropped to $errors, below the baseline of $MARKETING_CHECK_BASELINE_ERRORS. Please lower MARKETING_CHECK_BASELINE_ERRORS in .github/workflows/ci.yml to $errors so the ratchet holds the new ground."
+          fi
+
+          echo "Type-check ratchet passed."
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+
+      # No dtolnay/rust-toolchain step on purpose. There is no rust-toolchain.toml
+      # in this repo, and backend/Dockerfile builds on rust:1-bookworm, so the
+      # runner's preinstalled stable Rust is the closest available match for what
+      # actually ships. The two are independently floating pointers and can sit a
+      # release apart; the point is only that pinning some THIRD toolchain here
+      # would test something production never uses.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Three constraints are load-bearing here. Counts are as of savvagent/nels#462
+      # and are not enforced by anything, so treat them as orientation, not truth.
+      #
+      # 1. The crate is BIN-ONLY. There is backend/src/main.rs and no lib.rs, so
+      #    the target is `--bin backend`. Never `--lib` — there is no lib target
+      #    and the command would simply fail.
+      #
+      #    Note the flip side: `--bin backend` runs ONLY the binary's own unit
+      #    tests. There is no backend/tests/ directory today, so nothing is lost.
+      #    But if integration tests are ever added there, this command will
+      #    silently skip them and CI will stay green. Widen it at that point.
+      #
+      # 2. The ~375 #[ignore]d tests are DB-backed and are deliberately excluded.
+      #    `cargo test` skips #[ignore] by default, so no extra flag is needed to
+      #    leave them out. Running them would require a pgvector service
+      #    container, migrations applied, TOTP_ENC_KEY, a GEMINI_API_KEY, and
+      #    --test-threads serialization; the crate depends on serial_test
+      #    precisely because those tests race against one shared live Postgres.
+      #
+      #    The remaining tests need no database. The crate uses zero sqlx
+      #    compile-time QUERY macros — no query!/query_as!/query_scalar! anywhere
+      #    — so nothing needs a live schema at build time, and there is no .sqlx
+      #    offline dir. The one sqlx macro it does use, sqlx::migrate!, reads the
+      #    local migrations directory at compile time and needs no DATABASE_URL.
+      #
+      # 3. THE SKIP LIST BELOW IS A TEMPORARY WORKAROUND, tracked as
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          cargo test --bin backend
+
+  # Aggregate gate. This is the ONE job to treat as the overall CI verdict.
+  #
+  # Why it has to exist: with `needs:` plus a plain `if:`, a FAILED `changes` job
+  # leaves the three suite jobs SKIPPED, and GitHub treats a skipped job as
+  # SATISFYING a required status check. Reading the suite jobs individually would
+  # therefore let a broken `changes` job wave everything through green —
+  # reproducing exactly the silently-disappearing-gate failure this ticket exists
+  # to remove. This job always runs, always reports, and inspects the actual
+  # result of every need, including `changes` itself.
+  #
+  # ENFORCEMENT CAVEAT — read before assuming this blocks anything. It cannot
+  # currently be marked a required status check: savvagent/nels is private on a
+  # plan without branch protection or rulesets, and both
+  # /branches/main/protection and /rulesets return 403 "Upgrade to GitHub Pro or
+  # make this repository public". So a red `ci` is VISIBLE but not BLOCKING, and
+  # `gh pr merge` succeeds regardless. Tracked as savvagent/nels#484. Until that
+  # is resolved this workflow is a detector, not a gate — which is still a large
+  # improvement over nothing running at all, but do not over-claim it.
+  ci:
+    if: always()
+    needs: [changes, frontend, marketing, backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # `if: always()` also runs this job when the whole RUN is cancelled by the
+      # cancel-in-progress concurrency rule, where it will report failure on the
+      # superseded run. That is accepted and deliberate — the superseded run's
+      # verdict is meaningless anyway, and the replacement run reports the real
+      # one. Do NOT "fix" this to `!cancelled()`. Note `cancelled()` reports
+      # whether the RUN was cancelled, not whether an individual need was; under
+      # `!cancelled()` this job would be skipped for the whole run exactly when a
+      # cancellation needs examining, letting a cancelled need slip through.
+      - name: Gate on suite results
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          MARKETING_RESULT: ${{ needs.marketing.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          WANT_FRONTEND: ${{ needs.changes.outputs.frontend }}
+          WANT_MARKETING: ${{ needs.changes.outputs.marketing }}
+          WANT_BACKEND: ${{ needs.changes.outputs.backend }}
+        run: |
+          set -euo pipefail
+
+          failed=0
+
+          # An ALLOWLIST, not a denylist. MUST NOT use success(): it is false
+          # whenever ANY need is skipped, and a skipped need is the NORMAL path
+          # here, since most pull requests touch a single area. Inspect each
+          # result explicitly, and treat anything outside success|skipped —
+          # including the empty string and any conclusion GitHub adds in future —
+          # as a failure.
+          for entry in \
+            "changes:$CHANGES_RESULT" \
+            "frontend:$FRONTEND_RESULT" \
+            "marketing:$MARKETING_RESULT" \
+            "backend:$BACKEND_RESULT"
+          do
+            job="${entry%%:*}"
+            result="${entry#*:}"
+            echo "${job}: ${result}"
+            case "$result" in
+              success|skipped)
+                ;;
+              *)
+                echo "::error::Job '${job}' reported '${result}'."
+                failed=1
+                ;;
+            esac
+          done
+
+          # A `skipped` suite is accepted above, which is correct but is also the
+          # one way this gate could be hollowed out: any future edit that lets the
+          # `changes` job exit 0 while emitting BLANK outputs would skip all three
+          # suites and report green. That job spends twenty lines warning against
+          # exactly this, so assert it here rather than trusting the prose. Only
+          # meaningful when `changes` itself succeeded.
+          if [ "$CHANGES_RESULT" = "success" ]; then
+            for entry in \
+              "frontend:$WANT_FRONTEND" \
+              "marketing:$WANT_MARKETING" \
+              "backend:$WANT_BACKEND"
+            do
+              job="${entry%%:*}"
+              want="${entry#*:}"
+              case "$want" in
+                true|false)
+                  ;;
+                *)
+                  echo "::error::changes emitted '${want}' for the ${job} output; expected exactly 'true' or 'false'. Suite selection is unusable, so no suite result can be trusted."
+                  failed=1
+                  ;;
+              esac
+            done
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            echo "CI gate FAILED — at least one job did not succeed."
+            exit 1
+          fi
+
+          echo "CI gate PASSED — every job either succeeded or was correctly skipped."

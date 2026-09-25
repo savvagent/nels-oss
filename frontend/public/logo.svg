@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="hatGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7B2CBF" />
+      <stop offset="50%" stop-color="#4A00E0" />
+      <stop offset="100%" stop-color="#1A0033" />
+    </linearGradient>
+
+    <linearGradient id="brimGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#5A189A" />
+      <stop offset="100%" stop-color="#10002B" />
+    </linearGradient>
+
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE259" />
+      <stop offset="100%" stop-color="#FFA751" />
+    </linearGradient>
+
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE" />
+      <stop offset="100%" stop-color="#4FACFE" />
+    </linearGradient>
+
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <filter id="starGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Outer Glow (Optional/Subtle) -->
+  <circle cx="250" cy="230" r="180" fill="#7B2CBF" opacity="0.08" filter="url(#glow)"/>
+
+  <!-- Base Dark Outline / Shadow Layer -->
+  <path d="M 250,45 L 305,180 L 415,260 C 415,260 360,305 250,305 C 140,305 85,260 85,260 L 195,180 Z" fill="#10002B" />
+
+  <!-- Outer Brim Base -->
+  <path d="M 90,255 C 130,285 200,300 250,300 C 300,300 370,285 410,255 C 420,265 400,290 360,300 C 310,312 190,312 140,300 C 100,290 80,265 90,255 Z" fill="url(#goldGradient)"/>
+  
+  <ellipse cx="250" cy="275" rx="155" ry="32" fill="url(#brimGradient)" stroke="#240046" stroke-width="3"/>
+  <ellipse cx="250" cy="278" rx="155" ry="32" fill="none" stroke="url(#goldGradient)" stroke-width="3"/>
+
+  <!-- Main Hat Cone -->
+  <path d="M 250,75 L 325,268 C 290,282 210,282 175,268 Z" fill="url(#hatGradient)" />
+
+  <!-- Blue/Cyan Highlight Trim on Side -->
+  <path d="M 250,75 L 325,268 C 305,275 275,278 250,278 C 250,278 295,240 250,75 Z" fill="url(#cyanGlow)" opacity="0.4" />
+
+  <!-- Gold Band Above Brim -->
+  <path d="M 179,262 C 200,272 230,277 250,277 C 270,277 300,272 321,262 C 323,267 325,271 325,273 C 300,284 200,284 175,273 C 175,271 177,267 179,262 Z" fill="url(#goldGradient)"/>
+
+  <!-- Crescent Moon with Upward Arrow (Financial Magic Symbol) -->
+  <g transform="translate(0, 5)">
+    <!-- Crescent Moon Body -->
+    <path d="M 225,260 C 190,250 185,200 215,170 C 200,185 200,220 228,235 C 245,244 265,240 280,230 C 265,250 245,260 225,260 Z" fill="url(#goldGradient)" />
+    
+    <!-- Growth Arrow integrated into Crescent -->
+    <path d="M 215,225 C 220,180 250,145 275,120 L 260,122 L 285,100 L 292,130 L 278,130 C 258,153 232,185 227,225 Z" fill="url(#goldGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Top Star with Dollar Sign Glow -->
+  <!-- Outer Star Glow -->
+  <polygon points="250,30 263,60 295,63 270,85 278,117 250,100 222,117 230,85 205,63 237,60" fill="#00F2FE" opacity="0.6" filter="url(#starGlow)"/>
+
+  <!-- Main Star Body -->
+  <polygon points="250,35 261,62 290,65 268,84 275,112 250,97 225,112 232,84 210,65 239,62" fill="#7B2CBF" stroke="url(#cyanGlow)" stroke-width="3"/>
+  
+  <polygon points="250,35 261,62 290,65 268,84 275,112 250,97 225,112 232,84 210,65 239,62" fill="url(#hatGradient)" opacity="0.8"/>
+
+  <!-- Gold Dollar Sign ($) centered in Top Star -->
+  <text x="250" y="82" font-family="'Arial Black', 'Impact', sans-serif" font-size="26" font-weight="900" fill="url(#goldGradient)" text-anchor="middle" dominant-baseline="central" filter="url(#glow)">$</text>
+
+  <!-- Sparkles / Magical Accents -->
+  <path d="M 310,100 Q 310,110 320,110 Q 310,110 310,120 Q 310,110 300,110 Q 310,110 310,100 Z" fill="#00F2FE" />
+  <path d="M 180,140 Q 180,147 187,147 Q 180,147 180,154 Q 180,147 173,147 Q 180,147 180,140 Z" fill="#FFE259" />
+</svg>

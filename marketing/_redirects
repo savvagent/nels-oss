@@ -1,0 +1,16 @@
+# Apex → English locale. Cloudflare Pages serves this before SvelteKit, so the
+# bare domain lands on a real, indexable locale page (English is x-default).
+# Intentionally 302 (temporary): a future Cloudflare browser-locale redirect can
+# replace this without a 301 staying cached in visitors' browsers and pinning
+# them to /en.
+/  /en  302
+
+# Legacy pre-i18n paths (the site was not yet live, so these had no real traffic)
+# → their English routes, so any stray bookmark/link resolves instead of 404ing.
+/about         /en/about         301
+/compare       /en/compare       301
+/faq           /en/faq           301
+/features      /en/features      301
+/how-it-works  /en/how-it-works  301
+/pricing       /en/pricing       301
+/security      /en/security      301

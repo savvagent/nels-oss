@@ -1,0 +1,62 @@
+# Fly.io configuration for the Nels Rust/Axum API.
+# Co-located in iad with the savvagent-pg MPG cluster for low DB latency.
+app = "nels-api"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8080"
+  # CORS_ALLOWED_ORIGINS MUST be set to the Pages app origin(s), e.g.
+  #   fly secrets set CORS_ALLOWED_ORIGINS=https://nels-xxx.pages.dev
+  # In production (FLY_APP_NAME is set) the API fails closed and denies ALL
+  # cross-origin requests until this is set. Only local dev falls back to
+  # allow-any. Comma-separate multiple origins.
+
+# DATABASE_URL, GEMINI_API_KEY, and TOTP_ENC_KEY are set via `fly secrets set`,
+# not here. TOTP_ENC_KEY is required (base64 of 32 bytes: openssl rand -base64 32);
+# the backend refuses to start without it. Despite the name it no longer
+# encrypts login credentials (login is WebAuthn passkeys, nels#551) — it now
+# encrypts bank-provider access tokens at rest (backend/src/crypto.rs).
+#
+# WEBAUTHN_APP_RP_ID / WEBAUTHN_APP_ORIGIN / WEBAUTHN_ADMIN_RP_ID /
+# WEBAUTHN_ADMIN_ORIGIN are OPTIONAL — on Fly they default to production
+# (app: RP ID nels.money, origin https://app.nels.money; admin:
+# nels-admin.pages.dev) and only need overriding if
+# either app is ever served from a different domain. RECOVERY_CODE_COUNT is
+# OPTIONAL (default 10). Note CORS_ALLOWED_ORIGINS above must include BOTH the
+# app's and admin console's origins, or the one left out can't reach this API
+# at all — passkeys make this no more or less true than before, since the
+# admin console has always called this same backend from its own origin.
+#
+# GITHUB_TOKEN is OPTIONAL — it enables the chat command palette's /issues-list
+# and /issues-create (#56); without it those two commands degrade gracefully and
+# the rest of the app is unaffected. Use a fine-grained PAT scoped to *Issues:
+# read & write* on the target repo only (least privilege); it is used server-side
+# only and never sent to the client. Set it via:
+#   fly secrets set GITHUB_TOKEN=<pat> -a nels-api
+# GITHUB_REPO is optional and defaults to savvagent/nels — only set it to target
+# a different repo:
+#   fly secrets set GITHUB_REPO=<owner/repo> -a nels-api
+# GITHUB_ISSUE_RATE_LIMIT / GITHUB_ISSUE_RATE_WINDOW_SECS are OPTIONAL and bound
+# how many issues one user can file via chat REPORT_ISSUE or /issues-create in a
+# rolling window (defaults: 5 per 3600s). Override via `fly secrets set` if needed.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

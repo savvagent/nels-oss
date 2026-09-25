@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": true,
+  "tag-separator": "-",
+  "include-component-in-tag": true,
+  "bootstrap-sha": "759748da688ce3e37676b3a655a428dd1325174e",
+  "packages": {
+    "backend": {
+      "release-type": "rust",
+      "component": "backend"
+    },
+    "frontend": {
+      "release-type": "node",
+      "component": "frontend"
+    },
+    "marketing": {
+      "release-type": "node",
+      "component": "marketing"
+    },
+    "admin": {
+      "release-type": "node",
+      "component": "admin"
+    }
+  }
+}

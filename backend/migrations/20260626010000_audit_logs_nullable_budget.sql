@@ -1,0 +1,11 @@
+-- User-level (non-budget-scoped) audit trail (#192). REPORT_ISSUE and other
+-- actions that aren't tied to a budget (e.g. chat REPORT_ISSUE, which is now
+-- always user-scoped, and the REST POST /github/issues path driven by the
+-- /issues-create slash command) need an audit row attributable to the user.
+-- `log_audit` required a non-null budget_id; making the column nullable lets
+-- `log_user_audit` write a user-scoped row (NULL budget_id). The budget_id FK
+-- (ON DELETE CASCADE) is unaffected (a NULL FK simply never cascades); the
+-- separate user_id FK is ON DELETE SET NULL, but a deleted user's rows are
+-- still removed explicitly by account deletion (account.rs delete_user_data:
+-- DELETE FROM audit_logs WHERE user_id = $1).
+ALTER TABLE audit_logs ALTER COLUMN budget_id DROP NOT NULL;

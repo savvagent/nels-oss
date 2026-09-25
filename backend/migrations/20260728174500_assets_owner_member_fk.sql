@@ -1,0 +1,171 @@
+-- assets.owner_member_id -> retirement_profiles: the composite ownership FK (nels#500).
+--
+-- THE THIRD MIGRATION, and why it has to exist at all.
+-- `assets.owner_member_id` was created by #464 (20260728163000) with NO foreign
+-- key, on purpose, and `retirement_profiles` was created by #465 (20260728093000).
+-- The FK could live in NEITHER of them:
+--   (1) ORDERING ON A FRESH DATABASE. sqlx applies migrations in version-sorted
+--       order, not merge order -- the sort happens once during source resolution
+--       (sqlx-core-0.7.4 src/migrate/source.rs:137,
+--       `migrations.sort_by_key(|(m, _)| m.version)`). #465 occupies slot
+--       20260728093000, which sorts BEFORE #464's 20260728163000, so on a fresh
+--       database #465 runs first and `assets` does not exist yet; an FK declared
+--       there fails outright. Symmetrically an FK declared in #464's file fails on
+--       any database where #465 has not yet run.
+--   (2) MERGE ORDER IS NOT RELEASE ORDER. Deploys here are release-gated: merging
+--       a feature PR does not deploy it, and the release PR can bundle either or
+--       both. "#465 merged first, therefore its table exists" is not a sound
+--       inference about any particular database.
+-- Hence a standalone third migration versioned strictly after BOTH.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT `owner_member_id` REFERS TO: `retirement_profiles.id`, NOT `member_ordinal`.
+-- ---------------------------------------------------------------------------
+-- This was not an open choice. The column shipped in 20260728163000 as
+-- `owner_member_id UUID`, while `member_ordinal` is `INT`; #464's own header and
+-- AGENTS.md both name `retirement_profiles(id)` as the intended referent.
+-- Reinterpreting it as the ordinal would be a type change on an already-shipped
+-- table, and would buy nothing: the ordinal is dense and per-user, so it carries
+-- strictly less information than the row's identity.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THE COMPOSITE FORM IS POSSIBLE WITHOUT TOUCHING THE BUSINESS KEY.
+-- ---------------------------------------------------------------------------
+-- It is tempting to conclude that because `retirement_profiles` declares
+-- `UNIQUE (user_id, member_ordinal)`, a composite FK must reference THAT key --
+-- and therefore that a composite FK and the UUID meaning above are mutually
+-- exclusive. They are not. PostgreSQL requires only that the referenced column
+-- list be covered by SOME unique index; it does not have to be the table's
+-- declared business key. So we add a unique index on `(user_id, id)` and point
+-- the FK at that. `id` is already the PRIMARY KEY, so `(user_id, id)` is unique
+-- by implication and the index can never reject a row that the primary key
+-- already accepts -- it exists solely to make that fact visible to the FK
+-- machinery.
+--
+-- `UNIQUE (user_id, member_ordinal)` is deliberately LEFT ALONE. This FK does not
+-- need it, and concurrent work on the retirement planner depends on it. Do not
+-- "consolidate" the two.
+--
+-- The in-repo precedent is #464's own: 20260728163000 creates
+-- `linked_accounts_user_id_id_idx ON linked_accounts (user_id, id)` and then
+-- points `assets_linked_account_same_user_fkey` at `linked_accounts (user_id, id)`.
+-- This file is the same move for the household-member link.
+--
+-- ---------------------------------------------------------------------------
+-- WHY COMPOSITE AND NOT A BARE `owner_member_id` FK.
+-- ---------------------------------------------------------------------------
+-- A bare `FOREIGN KEY (owner_member_id) REFERENCES retirement_profiles (id)`
+-- proves only that SOME household member exists with that id -- not that it is
+-- one of THIS asset's owner's members. `assets` is `user_id`-scoped and every
+-- read filters `WHERE user_id = $1` (AGENTS.md: filter on `user_id`, never on
+-- `budget_id`), so an asset carrying user A's `user_id` and user B's
+-- `owner_member_id` is served faithfully to A while attributing A's balances to a
+-- member of B's household. The composite form makes that row unrepresentable.
+-- This is the identical failure #464 closed for `linked_account_id`, where
+-- deriving ownership from the linked account's BUDGET -- the pattern every
+-- existing sync uses -- would file one household member's holdings under the
+-- other's `user_id`.
+--
+-- ---------------------------------------------------------------------------
+-- ON DELETE: `SET NULL (owner_member_id)`. The alternatives were not stylistic.
+-- ---------------------------------------------------------------------------
+-- CASCADE is wrong: deleting a household member would DESTROY that member's
+-- assets, along with their `asset_holdings` and `asset_balance_history`, which is
+-- a data-loss event triggered by what a user reasonably reads as an edit.
+--
+-- RESTRICT / NO ACTION is wrong, and this one is not a matter of taste -- it
+-- BREAKS ACCOUNT DELETION UNCONDITIONALLY. `account::delete_user_data` issues an
+-- explicit `DELETE FROM retirement_profiles WHERE user_id = $1` and then
+-- `DELETE FROM users`, and it never deletes `assets` at all (it relies on the
+-- users cascade for those). Under RESTRICT that explicit profile delete raises
+-- 23503 for any user with a non-NULL `owner_member_id`, aborting the whole
+-- transaction -- so GDPR erasure would fail for exactly the users who had used
+-- the household feature. Note this is NOT rescued by cascade ordering: a bare
+-- `DELETE FROM users` happens to survive because the `assets` cascade may fire
+-- first, but that is trigger-firing order, not a contract, and the real deletion
+-- path does not go through it anyway.
+--
+-- SET NULL is right. The asset row SURVIVES with its `user_id` intact and reverts
+-- to `owner_member_id IS NULL`, which is precisely the "not attributed to a
+-- household member" state that EVERY asset row is in today. That is not an
+-- orphan: `user_id` is the only column access control reads, so the asset stays
+-- fully owned, fully returned by `list_assets_for_user`, and still cascades away
+-- when the user is deleted. Nothing is silently destroyed and nothing is
+-- unreachable. A future "remove this household member" UI should still WARN that
+-- assets will be unassigned -- that is an application-layer affordance, not
+-- something the constraint can express.
+--
+-- THE COLUMN-LIST FORM `SET NULL (owner_member_id)` IS LOAD-BEARING, not
+-- decoration. Plain `ON DELETE SET NULL` nulls EVERY column in the FK's local
+-- list, which here includes `user_id`; since `user_id` is NOT NULL, deleting a
+-- profile would abort with
+--   ERROR: null value in column "user_id" of relation "assets" violates not-null
+-- instead of unassigning the asset cleanly. The column-list form nulls only
+-- `owner_member_id`. It requires PostgreSQL 15 or newer; production and local dev
+-- are both PG16. Same form, same reason, as this table's
+-- `ON DELETE SET NULL (linked_account_id)`.
+--
+-- MATCH SIMPLE is PostgreSQL's default for multi-column foreign keys: the
+-- constraint is NOT checked at all when any referenced column is NULL. Here that
+-- is exactly right -- an asset not yet attributed to a household member has
+-- `owner_member_id IS NULL` and is simply exempt, with no partial constraint and
+-- no trigger.
+--
+-- ---------------------------------------------------------------------------
+-- NO BACKFILL, AND THE COLUMN STAYS NULLABLE.
+-- ---------------------------------------------------------------------------
+-- There is nothing to backfill TO. #465 creates no `retirement_profiles` row for
+-- any existing user -- `GET` returns `200 null` for everyone -- so a backfill
+-- would first have to INVENT a profile, which means inventing `country`,
+-- `birth_date` and `current_gross_income`: the three fields #465 deliberately
+-- refuses to default because they cannot be supplied "without fabricating a fact
+-- about the user". Separately, `insert_asset` is the only writer and every call
+-- site passes `None` today, so the live column is uniformly NULL and MATCH SIMPLE
+-- exempts every existing row -- this constraint cannot fail to apply on real data.
+--
+-- `NOT NULL` is therefore impossible now and would be wrong later regardless: "an
+-- asset that has not been attributed to a household member yet" is a legitimate,
+-- reachable state in a two-member household, not a defect to be constrained away.
+--
+-- Consequence: this FK is PROSPECTIVE. Until a write path sets `owner_member_id`
+-- to something non-NULL, it can never fire in production. That is deliberate --
+-- it is far cheaper to land the constraint before the writer exists than to
+-- discover mis-attributed rows afterwards and have to repair them.
+--
+-- ---------------------------------------------------------------------------
+-- LOCKING / IDEMPOTENCY.
+-- ---------------------------------------------------------------------------
+-- `CREATE UNIQUE INDEX` is plain, not CONCURRENTLY: sqlx runs each migration
+-- inside a transaction and CONCURRENTLY cannot run in one. `ALTER TABLE ... ADD
+-- CONSTRAINT` takes a brief ACCESS EXCLUSIVE lock and then validates. Both tables
+-- were created hours ago and hold no production rows, so the window is
+-- negligible; a future FK onto a large table would want the
+-- `NOT VALID` + `VALIDATE CONSTRAINT` split instead.
+--
+-- The `ADD CONSTRAINT` deliberately carries NO existence guard. PostgreSQL 16 has
+-- no `ADD CONSTRAINT IF NOT EXISTS`, and #464's header already records why the
+-- workarounds are worse: a guard that silently skips leaves the constraint
+-- absent while the migration reports success, which is the exact failure this
+-- file exists to prevent. sqlx's `_sqlx_migrations` version ledger is what makes
+-- it run exactly once; re-running it against a database that already has the
+-- constraint SHOULD fail loudly.
+
+-- The FK target. `id` is already the PRIMARY KEY, so this index adds no
+-- constraint that the primary key does not already impose -- it exists to make
+-- `(user_id, id)` referenceable.
+--
+-- `IF NOT EXISTS` matches on NAME ONLY, not on the column list, so it would
+-- silently skip a pre-existing index of the same name over different columns.
+-- That is tolerable here only because the `ADD CONSTRAINT` below carries no
+-- such guard: if the skipped index were the wrong shape, the constraint fails
+-- loudly with "there is no unique constraint matching given keys for referenced
+-- table". The guard can therefore hide a mistake for one statement at most, and
+-- can never let this migration report success without the FK.
+CREATE UNIQUE INDEX IF NOT EXISTS retirement_profiles_user_id_id_idx
+    ON retirement_profiles (user_id, id);
+
+ALTER TABLE assets
+    ADD CONSTRAINT assets_owner_member_same_user_fkey
+    FOREIGN KEY (user_id, owner_member_id)
+    REFERENCES retirement_profiles (user_id, id)
+    ON DELETE SET NULL (owner_member_id);

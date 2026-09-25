@@ -1,0 +1,60 @@
+[package]
+name = "backend"
+version = "0.45.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+axum = { version = "0.7.5", features = ["multipart"] }
+tower = { version = "0.4" }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "macros", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# WebAuthn/FIDO2 passkey ceremonies (nels#551). `danger-allow-state-serialisation`
+# is required because ceremony state (PasskeyRegistration/PasskeyAuthentication) is
+# persisted in auth_flows.ceremony_state between /start and /finish, mirroring the
+# existing DB-backed auth_flows pattern (a backend restart must not kill an
+# in-progress ceremony). This is safe here because the serialized blob is
+# server-generated and keyed by our own random flow_id — never attacker-supplied.
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+# Direct dep only to name the unwrapped options types webauthn-rs does not re-export.
+webauthn-rs-proto = "0.5"
+# Encodes recovery codes (was TOTP secrets pre-nels#551) as readable base32.
+base32 = "0.5"
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+rand_distr = "0.4"
+base64 = "0.22"
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+url = "2.5"
+jsonwebtoken = "9"
+hex = "0.4"
+rmcp = { version = "3.1.2", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+schemars = { version = "1.0", features = ["uuid1"] }
+
+
+
+[dev-dependencies]
+# `ServiceExt::oneshot` (tower's `util` feature) drives a Router through a single
+# request in tests — the idiomatic axum testing pattern. Dev-only; the prod build
+# keeps the default-featured `tower` above.
+tower = { version = "0.4", features = ["util"] }
+wiremock = "0.6"
+# Serializes specific #[ignore]d DB tests (via #[serial]) that would otherwise
+# race each other against the shared live Postgres test instance when run
+# with --test-threads > 1. Dev-only.
+serial_test = "3"
+# Generates real P-256 ECDSA keypairs for the plaid.rs webhook JWT/JWK tests
+# (jsonwebtoken's own ES256 encode/decode path already goes through ring
+# internally, so this is a version already present transitively — just
+# exposed directly so tests can construct a keypair and derive JWK x/y).
+ring = "0.17"
