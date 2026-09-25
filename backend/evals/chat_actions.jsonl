@@ -1,0 +1,53 @@
+{"id":"none-greeting","message":"hi there!","expect_action":"NONE","expect_params":{}}
+{"id":"none-advice","message":"any tips for saving on groceries?","expect_action":"NONE","expect_params":{}}
+{"id":"create-budget","message":"create a monthly budget called Pets with a $150 limit, zero-based","expect_action":"CREATE_BUDGET","expect_params":{"budget_name":"Pets","time_frame":"monthly","budget_strategy":"zero_based"}}
+{"id":"update-budget-rename","message":"rename this budget to Home Base","expect_action":"UPDATE_BUDGET","expect_params":{"new_budget_name":"Home Base"}}
+{"id":"update-budget-rollover","message":"turn on rollover for this budget","expect_action":"UPDATE_BUDGET","expect_params":{"rollover":true}}
+{"id":"close-budget","message":"close the Kitchen Remodel budget, the project is done","expect_action":"CLOSE_BUDGET","expect_params":{"target_budget_name":"Kitchen Remodel"}}
+{"id":"archive-budget","message":"archive my Vacation budget","expect_action":"ARCHIVE_BUDGET","expect_params":{"target_budget_name":"Vacation"}}
+{"id":"unarchive-budget","message":"unarchive the Vacation budget","expect_action":"UNARCHIVE_BUDGET","expect_params":{"target_budget_name":"Vacation"}}
+{"id":"rollup","message":"roll up the Vacation budget into Household","expect_action":"ROLLUP_BUDGET","expect_params":{"child_budget_name":"Vacation"}}
+{"id":"unrollup","message":"unroll Vacation from Household","expect_action":"UNROLLUP_BUDGET","expect_params":{"child_budget_name":"Vacation"}}
+{"id":"create-category","message":"add an expense category called Gym with a $50 limit","expect_action":"CREATE_CATEGORY","expect_params":{"category_name":"Gym","category_limit":50}}
+{"id":"seed-categories","message":"yes, add the usual starter categories","expect_action":"SEED_CATEGORIES","expect_params":{}}
+{"id":"delete-category","message":"delete the Dining category","expect_action":"DELETE_CATEGORY","expect_params":{"category_name":"Dining"}}
+{"id":"update-category-rename","message":"rename Dining to Eating Out","expect_action":"UPDATE_CATEGORY","expect_params":{"category_name":"Dining","new_category_name":"Eating Out"}}
+{"id":"set-category-limit","message":"set the Groceries limit to 650","expect_action":"CREATE_CATEGORY","expect_params":{"category_name":"Groceries","category_limit":650}}
+{"id":"category-rollover","message":"let unspent Groceries money roll over each month","expect_action":"SET_CATEGORY_ROLLOVER","expect_params":{"category_name":"Groceries","category_rollover":true}}
+{"id":"category-fund","message":"make Groceries a sinking fund","expect_action":"SET_CATEGORY_FUND","expect_params":{"category_name":"Groceries","is_fund":true}}
+{"id":"delete-budget","message":"delete the Vacation budget","expect_action":"DELETE_BUDGET","expect_params":{"target_budget_name":"Vacation"}}
+{"id":"add-tx","message":"I spent $23.40 at Safeway on groceries","expect_action":"ADD_TRANSACTION","expect_params":{"amount":23.4,"category_name":"Groceries"}}
+{"id":"add-tx-income","message":"got my paycheck, $3200","expect_action":"ADD_TRANSACTION","expect_params":{"amount":3200,"category_name":"Salary"}}
+{"id":"edit-tx","message":"change the Chipotle transaction to $16","expect_action":"EDIT_TRANSACTION","expect_params":{"amount":16}}
+{"id":"delete-tx","message":"delete the PG&E transaction","expect_action":"DELETE_TRANSACTION","expect_params":{}}
+{"id":"share","message":"share this budget with alex@example.com so they can edit","expect_action":"SHARE_BUDGET","expect_params":{"email":"alex@example.com","permission_level":"edit"}}
+{"id":"create-goal","message":"I want to save $2000 for a new laptop by next June","expect_action":"CREATE_GOAL","expect_params":{"target_amount":2000}}
+{"id":"goal-contribution","message":"put $100 toward my Emergency cushion goal","expect_action":"ADD_GOAL_CONTRIBUTION","expect_params":{"amount":100}}
+{"id":"reminder","message":"remind me every week to log my receipts","expect_action":"CREATE_REMINDER","expect_params":{"cadence":"weekly"}}
+{"id":"list-budgets","message":"what budgets do I have?","expect_action":"LIST_BUDGETS","expect_params":{}}
+{"id":"switch-budget","message":"switch to my Vacation budget","expect_action":"SWITCH_BUDGET","expect_params":{"target_budget_name":"Vacation"}}
+{"id":"set-name","message":"by the way, call me Samantha","expect_action":"SET_USER_NAME","expect_params":{"name":"Samantha"}}
+{"id":"export","message":"how do I download all my data?","expect_action":"EXPORT_DATA","expect_params":{}}
+{"id":"insights","message":"show me my spending trends","expect_action":"OPEN_INSIGHTS","expect_params":{}}
+{"id":"budgets-page","message":"open the budgets page","expect_action":"OPEN_BUDGETS_LIST","expect_params":{}}
+{"id":"list-categories","message":"show my categories","expect_action":"LIST_CATEGORIES","expect_params":{}}
+{"id":"category-balance","message":"how much is left in Dining?","expect_action":"CATEGORY_BALANCE","expect_params":{"category_name":"Dining"}}
+{"id":"affordability","message":"can I spend $40 on Dining this week?","expect_action":"CATEGORY_AFFORDABILITY","expect_params":{"category_name":"Dining","amount":40}}
+{"id":"search-tx","message":"find anything I spent on coffee","expect_action":"SEARCH_TRANSACTIONS","expect_params":{}}
+{"id":"list-tx","message":"list my Groceries transactions","expect_action":"LIST_TRANSACTIONS","expect_params":{"category_name":"Groceries"}}
+{"id":"exclude-tx","message":"exclude the PG&E transaction from my budget","expect_action":"EXCLUDE_TRANSACTION","expect_params":{}}
+{"id":"ignore-rule","message":"always ignore imported transactions from Venmo transfers","expect_action":"CREATE_IGNORE_RULE","expect_params":{}}
+{"id":"delete-account","message":"I want to delete my account","expect_action":"DELETE_ACCOUNT","expect_params":{}}
+{"id":"report-issue","message":"the insights chart won't load, please tell the developers","expect_action":"REPORT_ISSUE","expect_params":{}}
+{"id":"retirement-profile","message":"I live in the US, I was born 1985-06-15 and earn $120000 a year","expect_action":"SET_RETIREMENT_PROFILE","expect_params":{}}
+{"id":"retirement-projection","message":"show my retirement projection","expect_action":"RETIREMENT_PROJECTION","expect_params":{}}
+{"id":"ambig-category-balance","message":"how much is left?","expect_action":"NONE","expect_params":{}}
+{"id":"ambig-no-claim-report","message":"this app is annoying","expect_action":"NONE","expect_params":{}}
+{"id":"ambig-create-budget-no-strategy","message":"create a budget called Pets","expect_action":"NONE","expect_params":{}}
+{"id":"ambig-dictated-amount","message":"log 19204 at Costco for groceries","expect_action":"NONE","expect_params":{}}
+{"id":"ambig-affordability-no-amount","message":"can I spend money on Dining this week?","expect_action":"NONE","expect_params":{}}
+{"id":"add-tx-dining","message":"lunch at Chipotle was 12 bucks","expect_action":"ADD_TRANSACTION","expect_params":{"amount":12,"category_name":"Dining"}}
+{"id":"add-tx-utility","message":"paid the water bill, $45.10","expect_action":"ADD_TRANSACTION","expect_params":{"amount":45.1,"category_name":"Utilities"}}
+{"id":"create-budget-project","message":"start a project budget called Deck Rebuild, limit-spent-remaining style","expect_action":"CREATE_BUDGET","expect_params":{"budget_name":"Deck Rebuild","budget_type":"project","budget_strategy":"limit_spent_remaining"}}
+{"id":"update-budget-autorenew","message":"make this budget auto-renew every month","expect_action":"UPDATE_BUDGET","expect_params":{"auto_renew":true}}
+{"id":"share-view","message":"let jordan@example.com view this budget","expect_action":"SHARE_BUDGET","expect_params":{"email":"jordan@example.com","permission_level":"view"}}

@@ -1,0 +1,10 @@
+{
+  "user_email": "eval@example.test",
+  "name_context": "The user's name is Sam.",
+  "language_context": "Reply in English.",
+  "budgets_context": "USER'S BUDGETS:\n- Household (active, owner, monthly)\n- Kitchen Remodel (project, owner)\n- Vacation (monthly, owner)",
+  "budget_context": "ACTIVE BUDGET DETAILS:\nName: Household\nTime frame: monthly\nBudget maturity: established\nCATEGORIES:\n- Groceries (expense) limit $600.00, spent $412.30\n- Dining (expense) limit $200.00, spent $185.00\n- Utilities (expense) limit $250.00, spent $120.00\n- Salary (income)\n- Emergency Fund (savings) limit $300.00\nRECENT TRANSACTIONS:\n- 2026-09-20 Trader Joe's $84.12 (Groceries)\n- 2026-09-19 Chipotle $14.50 (Dining)\n- 2026-09-18 PG&E $120.00 (Utilities)\nGOALS:\n- Emergency cushion (savings) target $5000.00",
+  "semantic_context": "",
+  "history_context": "",
+  "usage_context": ""
+}

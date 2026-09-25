@@ -29,6 +29,8 @@ mod r#rag;
 mod github;
 mod usage;
 mod llm;
+#[cfg(test)]
+mod llm_eval;
 mod backfill;
 mod billing;
 mod financial_connections;
