@@ -12,6 +12,8 @@ use serde_json::{Map, Value};
 
 const PARSE_GATE: f64 = 0.95;
 const ACTION_GATE: f64 = 0.90;
+/// Retries per fixture when the provider rate-limits the eval (backoff 20s, 40s, 60s).
+const RATE_LIMIT_RETRIES: u32 = 3;
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Fixture {
@@ -144,35 +146,62 @@ async fn live_chat_action_eval() {
     let model_slug = creds.model.replace(['/', ':'], "-");
     let path = format!("{dir}/{date}-{}-{model_slug}.md", provider.as_str());
     std::fs::create_dir_all(&dir).unwrap();
+    // EVAL_ONLY=id1,id2 reruns just those fixtures to diagnose failures. It is a
+    // diagnostic mode: it prints full raw replies and never writes a results file,
+    // so a partial run can't overwrite or pass for a full one.
+    let only: Option<Vec<String>> =
+        set("EVAL_ONLY").map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
+    let fixtures: Vec<Fixture> = load_fixtures()
+        .into_iter()
+        .filter(|f| only.as_ref().map_or(true, |ids| ids.contains(&f.id)))
+        .collect();
     let mut outcomes = Vec::new();
-    for fx in load_fixtures() {
-        // Same user framing and 30s timeout as rag.rs's chat_endpoint.
-        let raw = match generate_json(
-            &creds,
-            &system,
-            &format!("USER MESSAGE: {}", fx.message),
-            std::time::Duration::from_secs(30),
-        )
-        .await
-        {
-            Ok(out) => out.text,
-            Err(e) => {
-                // LlmError carries no key material; safe to print.
-                eprintln!("{}: call failed: {:?}", fx.id, e);
-                String::new()
+    for fx in fixtures {
+        // Same user framing and 30s timeout as rag.rs's chat_endpoint. A 429 says
+        // nothing about model quality (new accounts have low rate limits), so retry
+        // it with backoff before scoring; any other error counts as a miss.
+        let mut attempt = 0;
+        let raw = loop {
+            match generate_json(
+                &creds,
+                &system,
+                &format!("USER MESSAGE: {}", fx.message),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            {
+                Ok(out) => break out.text,
+                Err(crate::llm::LlmError::RateLimited) if attempt < RATE_LIMIT_RETRIES => {
+                    attempt += 1;
+                    eprintln!("{}: rate limited, retry {attempt}/{RATE_LIMIT_RETRIES}", fx.id);
+                    tokio::time::sleep(std::time::Duration::from_secs(20 * attempt as u64)).await;
+                }
+                Err(e) => {
+                    // LlmError carries no key material; safe to print.
+                    eprintln!("{}: call failed: {:?}", fx.id, e);
+                    break String::new();
+                }
             }
         };
         let o = score(&fx, &raw);
-        if !o.params_ok {
-            eprintln!("{} FAIL {:?}\n  raw: {}", fx.id, o, raw.chars().take(400).collect::<String>());
+        if !o.params_ok || only.is_some() {
+            let limit = if only.is_some() { usize::MAX } else { 400 };
+            eprintln!("{} {} {:?}\n  raw: {}", fx.id, if o.params_ok { "ok" } else { "FAIL" }, o,
+                      raw.chars().take(limit).collect::<String>());
         }
         outcomes.push((fx.id.clone(), o));
-        // Rewrite the report after every paid call, so an interrupted run keeps
-        // the results it already paid for (the file then covers fewer fixtures).
-        std::fs::write(&path, report(provider.as_str(), &creds.model, &outcomes)).unwrap();
+        if only.is_none() {
+            // Rewrite the report after every paid call, so an interrupted run keeps
+            // the results it already paid for (the file then covers fewer fixtures).
+            std::fs::write(&path, report(provider.as_str(), &creds.model, &outcomes)).unwrap();
+        }
     }
     let md = report(provider.as_str(), &creds.model, &outcomes);
-    println!("{md}\nwritten to {path}");
+    if only.is_some() {
+        println!("{md}\n(EVAL_ONLY diagnostic run: no results file written)");
+    } else {
+        println!("{md}\nwritten to {path}");
+    }
 }
 
 #[cfg(test)]
