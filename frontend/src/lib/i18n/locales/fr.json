@@ -163,7 +163,8 @@
     "panelAria": "Menu principal",
     "history": "Historique",
     "categories": "Catégories",
-    "transactions": "Transactions"
+    "transactions": "Transactions",
+    "sourceCode": "Code source"
   },
   "history": {
     "title": "Historique",

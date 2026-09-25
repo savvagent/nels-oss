@@ -19,6 +19,7 @@
     <a href={`/${lang}/about`} class="link link-hover">{$_('footer.about')}</a>
     <a href={`/${lang}/faq`} class="link link-hover">{$_('footer.faq')}</a>
     <a href={`mailto:${SITE.supportEmail}`} class="link link-hover">{$_('footer.contact')}</a>
+    <a href={SITE.sourceUrl} class="link link-hover" rel="noopener">{$_('footer.sourceCode')}</a>
   </nav>
   <nav>
     <span class="footer-title">{$_('footer.legal')}</span>

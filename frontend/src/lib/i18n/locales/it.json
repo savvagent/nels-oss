@@ -163,7 +163,8 @@
     "panelAria": "Menu principale",
     "history": "Cronologia",
     "categories": "Categorie",
-    "transactions": "Transazioni"
+    "transactions": "Transazioni",
+    "sourceCode": "Codice sorgente"
   },
   "history": {
     "title": "Cronologia",

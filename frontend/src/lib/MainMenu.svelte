@@ -23,6 +23,9 @@
   // verbatim from Sidebar.svelte's own footer, which this replaces.
   const appVersion = __APP_VERSION__;
   const buildSha = __BUILD_SHA__;
+  // Public AGPL-3.0 source. AGPL §13 requires offering network users the
+  // source, so the menu footer links here from every screen.
+  const SOURCE_URL = "https://github.com/savvagent/nels-oss";
 
   let {
     open = false,
@@ -52,7 +55,7 @@
   // controls. Cycle within this panel's own buttons instead.
   function trapFocus(e) {
     if (e.key !== "Tab") return;
-    const rows = Array.from(panelEl?.querySelectorAll("button") ?? []);
+    const rows = Array.from(panelEl?.querySelectorAll("button, a[href]") ?? []);
     if (rows.length === 0) return;
     const first = rows[0];
     const last = rows[rows.length - 1];
@@ -242,7 +245,10 @@
          silently remove the only surface that lets a user pick up a
          waiting service-worker update — see pwa.svelte.js). -->
     <div class="border-t border-base-300 px-3 py-2 flex items-center justify-between gap-2 rounded-b-xl">
-      <span class="text-xs text-base-content/40 select-text">v{appVersion} · {buildSha}</span>
+      <span class="text-xs text-base-content/40 select-text">
+        v{appVersion} · {buildSha} ·
+        <a href={SOURCE_URL} target="_blank" rel="noopener" class="link link-hover text-base-content/70">{$_("menu.sourceCode")}</a>
+      </span>
       {#if pwa.updateAvailable}
         <button type="button" onclick={() => pwa.applyUpdate()} class="btn btn-xs btn-primary gap-1 normal-case">
           <RefreshCw class="w-3 h-3" />
