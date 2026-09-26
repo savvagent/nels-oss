@@ -1,0 +1,10 @@
+# The backend image is built from the repo root (backend/Dockerfile). Send only
+# what it needs: everything else (frontend, marketing, admin, node_modules,
+# spikes, .git) would bloat the context and invalidate the cache.
+*
+!core/
+!backend/
+**/target
+**/.env
+**/.env.*
+**/.claude
