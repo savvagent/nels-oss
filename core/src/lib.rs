@@ -9,4 +9,5 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod retirement;
 pub mod social_security;
