@@ -140,6 +140,7 @@ pub fn resolve_category_type(supplied: Option<&str>) -> String {
 ///
 /// All inputs are derived from the DB by the caller; the guard itself is pure and
 /// unit-tested so the cycle/nesting rules have a single, testable definition.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_rollup_link(
     parent_id: Uuid,
     child_id: Uuid,
@@ -272,7 +273,6 @@ pub fn rollup_category_name(
         ),
     ))
 }
-
 
 #[cfg(test)]
 mod tests {
