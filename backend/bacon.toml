@@ -14,6 +14,10 @@
 
 default_job = "run"
 
+# The backend compiles nels-core from ../core (spec savvagent/nels-oss#5);
+# rebuild on changes there too.
+watch = ["../core/src", "../core/Cargo.toml"]
+
 # Long-running server: on any change, kill the running server and start it
 # again with the freshly compiled binary.
 [jobs.run]

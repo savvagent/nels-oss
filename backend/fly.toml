@@ -4,6 +4,9 @@ app = "nels-api"
 primary_region = "iad"
 
 [build]
+  # Relative to this file. The build CONTEXT is the directory passed to
+  # `fly deploy`, which must be the repo root: fly deploy . --config backend/fly.toml
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "8080"

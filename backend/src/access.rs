@@ -22,7 +22,7 @@ pub async fn budget_entitlement(
     pool: &PgPool,
     budget_id: Uuid,
 ) -> Result<Entitlement, (StatusCode, String)> {
-    budget_entitlement_with(pool, budget_id, &PriceCatalog::from_env()).await
+    budget_entitlement_with(pool, budget_id, &crate::entitlement::price_catalog_from_env()).await
 }
 
 /// `budget_entitlement` with an explicit catalog (hermetic tests / composition).
@@ -59,7 +59,7 @@ pub async fn require_tier(
     budget_id: Uuid,
     min: Tier,
 ) -> Result<(), (StatusCode, String)> {
-    require_tier_with(pool, budget_id, min, &PriceCatalog::from_env()).await
+    require_tier_with(pool, budget_id, min, &crate::entitlement::price_catalog_from_env()).await
 }
 
 pub(crate) async fn require_tier_with(
@@ -99,7 +99,7 @@ pub async fn require_caller_tier(
     user_id: Uuid,
     min: Tier,
 ) -> Result<(), (StatusCode, String)> {
-    require_caller_tier_with(pool, user_id, min, &PriceCatalog::from_env()).await
+    require_caller_tier_with(pool, user_id, min, &crate::entitlement::price_catalog_from_env()).await
 }
 
 pub(crate) async fn require_caller_tier_with(
@@ -125,7 +125,7 @@ pub async fn require_writable_budget(
     user_id: Uuid,
     budget_id: Uuid,
 ) -> Result<(), (StatusCode, String)> {
-    require_writable_budget_with(pool, user_id, budget_id, &PriceCatalog::from_env()).await
+    require_writable_budget_with(pool, user_id, budget_id, &crate::entitlement::price_catalog_from_env()).await
 }
 
 pub(crate) async fn require_writable_budget_with(
@@ -177,7 +177,7 @@ pub async fn require_owner_entitled(
     if !billing_write_enforced() {
         return Ok(());
     }
-    require_owner_entitled_enforced(pool, budget_id, &PriceCatalog::from_env()).await
+    require_owner_entitled_enforced(pool, budget_id, &crate::entitlement::price_catalog_from_env()).await
 }
 
 /// The enforcing core (bypasses the flag), for hermetic tests and composition.

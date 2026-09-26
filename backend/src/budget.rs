@@ -12,6 +12,100 @@ use crate::auth::AppState;
 use crate::db::{Budget, Category, Transaction, BudgetShare};
 use crate::error::{internal_error, internal_error_message};
 
+// Pure domain rules live in nels-core (core/, spec savvagent/nels-oss#5).
+// Re-exported so existing `crate::budget::…` paths keep resolving.
+// Add NEW pure rules to core/, not here.
+pub use nels_core::budget::period::{
+    current_period_window, next_period_boundary, previous_period_window, project_span,
+    renewal_marker, source_spend_window,
+};
+pub use nels_core::budget::money::{
+    category_carried, category_carry_for, effective_carried, evaluate_affordability,
+    fund_effective_limit, fund_period_delta, resolve_base_amount,
+};
+pub use nels_core::budget::rules::{higher_share_level, resolve_category_type, Permission};
+#[cfg(test)]
+pub use nels_core::budget::rules::ALLOWED_CATEGORY_TYPES;
+use nels_core::budget::rules as core_rules;
+use nels_core::error::{RuleError, RuleErrorKind};
+
+/// The one place a core `RuleError` becomes an HTTP status (spec A6).
+fn rule_status(e: RuleError) -> (StatusCode, String) {
+    let status = match e.kind {
+        RuleErrorKind::BadRequest => StatusCode::BAD_REQUEST,
+        RuleErrorKind::Conflict => StatusCode::CONFLICT,
+    };
+    (status, e.message)
+}
+
+pub fn validate_permission_level(level: &str) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_permission_level(level).map_err(rule_status)
+}
+
+pub fn validate_budget_type(budget_type: &str) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_budget_type(budget_type).map_err(rule_status)
+}
+
+pub fn validate_amount_mode(amount_mode: &str) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_amount_mode(amount_mode).map_err(rule_status)
+}
+
+pub fn validate_budget_strategy(budget_strategy: &str) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_budget_strategy(budget_strategy).map_err(rule_status)
+}
+
+pub fn validate_category_type(category_type: &str) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_category_type(category_type).map_err(rule_status)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn validate_rollup_link(
+    parent_id: Uuid,
+    child_id: Uuid,
+    parent_is_child: bool,
+    child_is_parent: bool,
+    parent_type: &str,
+    child_type: &str,
+    parent_strategy: &str,
+    child_strategy: &str,
+) -> Result<(), (StatusCode, String)> {
+    core_rules::validate_rollup_link(
+        parent_id,
+        child_id,
+        parent_is_child,
+        child_is_parent,
+        parent_type,
+        child_type,
+        parent_strategy,
+        child_strategy,
+    )
+    .map_err(rule_status)
+}
+
+pub fn ensure_rollup_type_or_strategy_unchanged(
+    is_child: bool,
+    is_parent: bool,
+    field_label: &str,
+    current: &str,
+    requested: &str,
+) -> Result<(), (StatusCode, String)> {
+    core_rules::ensure_rollup_type_or_strategy_unchanged(
+        is_child,
+        is_parent,
+        field_label,
+        current,
+        requested,
+    )
+    .map_err(rule_status)
+}
+
+pub fn rollup_category_name(
+    source_name: &str,
+    existing: &[String],
+) -> Result<String, (StatusCode, String)> {
+    core_rules::rollup_category_name(source_name, existing).map_err(rule_status)
+}
+
 // Structs for Requests / Responses
 #[derive(Deserialize, Serialize)]
 pub struct BudgetPayload {
@@ -433,42 +527,6 @@ pub struct SharePayload {
     pub permission_level: String, // 'view', 'edit'
 }
 
-/// The only permission levels a share may be granted. `check_permission`
-/// fail-closes anything else to `View`, so an unknown value is not exploitable
-/// today, but accepting it is a foot-gun for any future code path that compares
-/// against another literal. Reject anything outside this set up front.
-pub const ALLOWED_PERMISSION_LEVELS: [&str; 2] = ["view", "edit"];
-
-/// Validate a share `permission_level` against the allowed set, returning a 400
-/// for anything else.
-pub fn validate_permission_level(level: &str) -> Result<(), (StatusCode, String)> {
-    if ALLOWED_PERMISSION_LEVELS.contains(&level) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "permission_level must be 'view' or 'edit'".to_string(),
-        ))
-    }
-}
-
-// Permission level enum for helper
-#[derive(PartialEq, PartialOrd, Debug)]
-pub enum Permission {
-    None,
-    View,
-    Edit,
-    Owner,
-}
-
-/// The more-privileged of two share levels ("view"/"edit"), compared by
-/// privilege rank — NOT lexically (lexically "edit" < "view", which would
-/// invert the result). Used to combine a direct share with an inherited one.
-fn higher_share_level(a: &str, b: &str) -> String {
-    let rank = |s: &str| if s == "edit" { 2 } else { 1 };
-    if rank(a).max(rank(b)) == 2 { "edit".to_string() } else { "view".to_string() }
-}
-
 // Helper to check user permission on a budget (Runtime query).
 //
 // #396: access also flows one level through the rollup backlink — a user with
@@ -636,123 +694,6 @@ async fn log_audit_row(
     }
 }
 
-/// Sum a budget's category amounts into a single budget total. A category with
-/// no amount (NULL `category_limit`) counts as 0, and a budget with no
-/// categories totals 0 (issue #46).
-///
-/// Retained only as a unit-tested pure helper documenting the null-as-0 rule;
-/// it has NO current production caller. The budget totals are computed in SQL by
-/// `computed_budget_total` / `computed_budget_totals`, which inline their own
-/// `COALESCE(..., 0)` (and resolve #52 mirror categories) rather than routing
-/// through this function.
-pub fn sum_category_amounts(amounts: &[Option<f64>]) -> f64 {
-    amounts.iter().map(|a| a.unwrap_or(0.0)).sum()
-}
-
-/// Resolve a budget's base amount given its mode (#116). 'fixed' budgets report
-/// their stored `budget_limit` (NULL -> 0.0); all other modes (incl. 'derived')
-/// report the summed expense-category total. One definition so every read site
-/// stays consistent.
-pub fn resolve_base_amount(amount_mode: &str, budget_limit: Option<f64>, category_sum: f64) -> f64 {
-    if amount_mode == "fixed" {
-        budget_limit.unwrap_or(0.0)
-    } else {
-        category_sum
-    }
-}
-
-/// The amount carried over into the current period from the previous period
-/// under per-budget rollover (issue #47). When rollover is disabled, nothing
-/// carries (0). When enabled, the unused remainder `base - prev_spent` carries,
-/// but a NEGATIVE remainder (overspend) is clamped to 0 — a deficit does NOT
-/// carry into the next period.
-///
-/// `base` is the budget's allotted total (sum of expense category limits);
-/// `prev_spent` is the actual expense transactions in the previous period — a
-/// deliberately different source, so a limit-less budget (base 0) never carries.
-pub fn carried_amount(enabled: bool, base: f64, prev_spent: f64) -> f64 {
-    if enabled {
-        (base - prev_spent).max(0.0)
-    } else {
-        0.0
-    }
-}
-
-/// The only budget types a budget may have. `time_based` is the existing
-/// calendar-period behavior (the default); `project` is a one-off project
-/// budget that runs from creation until it is closed. Reject anything outside
-/// this set up front.
-pub const ALLOWED_BUDGET_TYPES: [&str; 2] = ["time_based", "project"];
-
-/// Validate a `budget_type` against the allowed set, returning a 400 for
-/// anything else.
-pub fn validate_budget_type(budget_type: &str) -> Result<(), (StatusCode, String)> {
-    if ALLOWED_BUDGET_TYPES.contains(&budget_type) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "budget_type must be 'time_based' or 'project'".to_string(),
-        ))
-    }
-}
-
-/// The amount modes a budget may use (#116): 'derived' = base is the sum of
-/// expense category amounts (default); 'fixed' = base is the stored budget_limit.
-pub const ALLOWED_AMOUNT_MODES: [&str; 2] = ["derived", "fixed"];
-
-/// Validate an `amount_mode`, returning a 400 for anything else. Mirrors
-/// `validate_budget_type`. Case-sensitive — the DB CHECK is case-sensitive too.
-pub fn validate_amount_mode(amount_mode: &str) -> Result<(), (StatusCode, String)> {
-    if ALLOWED_AMOUNT_MODES.contains(&amount_mode) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "amount_mode must be 'derived' or 'fixed'".to_string(),
-        ))
-    }
-}
-
-/// Every allowed `budget_strategy` value (#300). Ship exactly these two now — the issue's
-/// "extensible to 50/30/20, envelope, pay-yourself-first later" is a property of this being
-/// a plain TEXT + CHECK column (additive to extend), not a requirement to pre-build
-/// unimplemented methodologies today.
-pub const ALLOWED_BUDGET_STRATEGIES: [&str; 2] = ["zero_based", "limit_spent_remaining"];
-
-/// Validate a `budget_strategy` against the allowed set, returning a 400 for anything else.
-/// Mirrors `validate_budget_type`/`validate_amount_mode`.
-pub fn validate_budget_strategy(budget_strategy: &str) -> Result<(), (StatusCode, String)> {
-    if ALLOWED_BUDGET_STRATEGIES.contains(&budget_strategy) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "budget_strategy must be 'zero_based' or 'limit_spent_remaining'".to_string(),
-        ))
-    }
-}
-
-/// The category kinds the carry logic understands. Only `expense` categories
-/// ever carry; the per-category rollover machinery (`category_carried`,
-/// `has_partial_category_rollover`, the RAG annotation) keys off the literal
-/// string `"expense"`, so an unvalidated junk type would silently be treated as
-/// non-expense and never carry. Validate it at the write sites instead.
-pub const ALLOWED_CATEGORY_TYPES: [&str; 3] = ["income", "savings", "expense"];
-
-/// Validate a `category_type` against the allowed set, returning a 400 for
-/// anything else. Mirrors `validate_budget_type`.
-pub fn validate_category_type(category_type: &str) -> Result<(), (StatusCode, String)> {
-    if ALLOWED_CATEGORY_TYPES.contains(&category_type) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "category_type must be 'income', 'savings', or 'expense'".to_string(),
-        ))
-    }
-}
-
 /// Map a `unique_category_name_per_budget` violation to the 409 both category
 /// write paths return, or `None` for any other error (leave it to the caller's
 /// own fallback).
@@ -771,98 +712,6 @@ pub fn duplicate_category_name_error(e: &sqlx::Error) -> Option<(StatusCode, Str
         }
     }
     None
-}
-
-/// Resolve the category type to persist on the chat write path (#168). The
-/// LLM may supply nothing (defaults to "expense") or an invalid type (e.g.
-/// "groceries", or the wrong-case "Expense"); the `categories` column is
-/// `VARCHAR(50) NOT NULL` with no CHECK constraint, so this is the only guard
-/// against junk types reaching the carry logic that keys off the literal
-/// "expense". Anything `validate_category_type` rejects falls back to "expense".
-pub fn resolve_category_type(supplied: Option<&str>) -> String {
-    let resolved = supplied.unwrap_or("expense");
-    if validate_category_type(resolved).is_ok() {
-        resolved.to_string()
-    } else {
-        "expense".to_string()
-    }
-}
-
-/// The carry amount for a budget, honoring its type. Project budgets are
-/// excluded from rollover/reset (#48), so they never carry (always 0).
-/// Time-based budgets delegate to `carried_amount`.
-pub fn effective_carried(budget_type: &str, rollover_enabled: bool, base: f64, prev_spent: f64) -> f64 {
-    if budget_type == "project" {
-        0.0
-    } else {
-        carried_amount(rollover_enabled, base, prev_spent)
-    }
-}
-
-/// Per-category carry (#49). A category carries its own unused remainder only
-/// when BOTH the budget master rollover switch and the category's own preference
-/// are on, and the budget is not a project budget (#48 exclusion). Overspend
-/// clamps to 0. Each category clamps independently, so one category's overspend
-/// never consumes another's remainder.
-pub fn category_carried(
-    budget_rollover: bool,
-    category_rollover: bool,
-    budget_type: &str,
-    base: f64,
-    prev_spent: f64,
-) -> f64 {
-    if budget_type == "project" || !budget_rollover || !category_rollover {
-        0.0
-    } else {
-        (base - prev_spent).max(0.0)
-    }
-}
-
-/// Effective limit for a fund category (#228): the base limit plus the
-/// materialized, CUMULATIVE, BIDIRECTIONAL running balance. Unlike
-/// `category_carried`/`carried_amount` (#47/#49), there is NO floor — a
-/// sustained overspend can leave a fund category with a genuine deficit that
-/// reduces future periods' effective limit until repaid. Non-fund categories
-/// are unaffected: this returns `category_limit` unchanged regardless of
-/// whatever `fund_balance` happens to hold (a disabled fund's balance is
-/// frozen but inert on the read path — see `chat_set_category_fund`).
-pub fn fund_effective_limit(is_fund: bool, category_limit: f64, fund_balance: f64) -> f64 {
-    if is_fund {
-        category_limit + fund_balance
-    } else {
-        category_limit
-    }
-}
-
-/// The result of comparing a requested spend amount against a category's
-/// ACTUAL effective remaining balance this period (CATEGORY_AFFORDABILITY,
-/// #302). `remaining` and `overage` are always computed (even when
-/// `can_afford` is true, `overage` is 0.0 — never negative), so a caller can
-/// render both branches of the answer from one value without re-deriving the
-/// arithmetic.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AffordabilityCheck {
-    pub can_afford: bool,
-    pub remaining: f64,
-    pub overage: f64,
-}
-
-/// Compare a requested spend amount against a category's effective remaining
-/// balance (#302). `effective_limit` must already be the FUND-AWARE effective
-/// limit (the caller resolves `category_limit: Option<f64>` — including the
-/// "no limit configured" case — BEFORE calling this; see
-/// `rag::format_affordability_message`, which mirrors
-/// `push_category_row`'s `category_limit.map(|l| fund_effective_limit(...))`
-/// pattern). `remaining` can legitimately be negative (an already-overspent
-/// or fund-deficit category) — in that case any positive `requested` is
-/// unaffordable, and `overage` is exactly `requested - remaining` (larger
-/// than `requested` itself). Affordability is inclusive at the boundary:
-/// `requested == remaining` is affordable (`<=`, not `<`).
-pub fn evaluate_affordability(requested: f64, effective_limit: f64, spent: f64) -> AffordabilityCheck {
-    let remaining = effective_limit - spent;
-    let can_afford = requested <= remaining;
-    let overage = if can_afford { 0.0 } else { requested - remaining };
-    AffordabilityCheck { can_afford, remaining, overage }
 }
 
 /// Guard a budget against mutation once it has been closed (#48). A closed
@@ -922,260 +771,6 @@ pub fn closed_or_transient_message(err: (StatusCode, String), action_phrase: &st
     }
 }
 
-/// The full lifetime span of a project budget — from creation until it is
-/// closed (or now if still open). Returns `(created_at, closed_at.unwrap_or(now))`.
-pub fn project_span(
-    created_at: DateTime<Utc>,
-    closed_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    (created_at, closed_at.unwrap_or(now))
-}
-
-/// The half-open `[start, end)` UTC window of the period IMMEDIATELY BEFORE the
-/// period containing `now`, used to source the previous period's spend for
-/// per-budget rollover (issue #47). Periods are anchored to the calendar:
-/// `monthly` -> the previous calendar month, `yearly` -> the previous calendar
-/// year, `quarterly` -> the previous fixed quarter (Q1=Jan-Mar, Q2=Apr-Jun,
-/// Q3=Jul-Sep, Q4=Oct-Dec). Any unrecognized `time_frame` falls back to
-/// `monthly`.
-pub fn previous_period_window(
-    time_frame: &str,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    let year = now.year();
-    let month = now.month();
-
-    match time_frame {
-        "yearly" => {
-            let end = Utc.with_ymd_and_hms(year, 1, 1, 0, 0, 0).unwrap();
-            let start = Utc.with_ymd_and_hms(year - 1, 1, 1, 0, 0, 0).unwrap();
-            (start, end)
-        }
-        "quarterly" => {
-            // First calendar month of the quarter containing `now` (1, 4, 7, 10).
-            let q_start_month = ((month - 1) / 3) * 3 + 1;
-            // The current quarter starts here; that's also where the previous
-            // quarter ends (half-open).
-            let end = Utc.with_ymd_and_hms(year, q_start_month, 1, 0, 0, 0).unwrap();
-            // Previous quarter begins three months earlier; underflow from Q1
-            // (Jan) rolls back to Q4 (Oct) of the prior year.
-            let (start_year, start_month) = if q_start_month == 1 {
-                (year - 1, 10)
-            } else {
-                (year, q_start_month - 3)
-            };
-            let start = Utc
-                .with_ymd_and_hms(start_year, start_month, 1, 0, 0, 0)
-                .unwrap();
-            (start, end)
-        }
-        // "monthly" and any unrecognized value.
-        _ => {
-            // End of the previous month is the first of the current month.
-            let end = Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0).unwrap();
-            // Previous month start; underflow from January rolls to December.
-            let (start_year, start_month) = if month == 1 {
-                (year - 1, 12)
-            } else {
-                (year, month - 1)
-            };
-            let start = Utc
-                .with_ymd_and_hms(start_year, start_month, 1, 0, 0, 0)
-                .unwrap();
-            (start, end)
-        }
-    }
-}
-
-/// The UTC start of the period IMMEDIATELY AFTER the period containing `now` —
-/// i.e. the next period boundary, used by auto-renew (#51) to schedule a budget's
-/// next renewal and to advance the marker once a period has elapsed. Anchored to
-/// the calendar exactly like `previous_period_window`: `monthly` -> first of next
-/// month, `quarterly` -> first month of the next fixed quarter (Q1=Jan, Q2=Apr,
-/// Q3=Jul, Q4=Oct), `yearly` -> Jan 1 of next year. Any unrecognized `time_frame`
-/// falls back to `monthly`.
-///
-/// Because the boundary is computed relative to `now` (not a stale stored
-/// marker), renewing after the server was down across several boundaries jumps
-/// straight to the next FUTURE boundary in a single advance — no catch-up loop.
-pub fn next_period_boundary(time_frame: &str, now: DateTime<Utc>) -> DateTime<Utc> {
-    let year = now.year();
-    let month = now.month();
-
-    match time_frame {
-        "yearly" => Utc.with_ymd_and_hms(year + 1, 1, 1, 0, 0, 0).unwrap(),
-        "quarterly" => {
-            // First calendar month of the quarter containing `now` (1, 4, 7, 10).
-            let q_start_month = ((month - 1) / 3) * 3 + 1;
-            // The next quarter begins three months later; overflow from Q4 (Oct)
-            // rolls forward to Q1 (Jan) of the next year.
-            if q_start_month == 10 {
-                Utc.with_ymd_and_hms(year + 1, 1, 1, 0, 0, 0).unwrap()
-            } else {
-                Utc.with_ymd_and_hms(year, q_start_month + 3, 1, 0, 0, 0)
-                    .unwrap()
-            }
-        }
-        // "monthly" and any unrecognized value.
-        _ => {
-            // First of next month; overflow from December rolls to January.
-            if month == 12 {
-                Utc.with_ymd_and_hms(year + 1, 1, 1, 0, 0, 0).unwrap()
-            } else {
-                Utc.with_ymd_and_hms(year, month + 1, 1, 0, 0, 0).unwrap()
-            }
-        }
-    }
-}
-
-/// The `next_renewal_at` marker to persist for a budget given its auto-renew
-/// state: `Some(next boundary)` when auto-renew is on, `None` when off. Keeping
-/// this in one place ensures the REST and chat paths compute the marker
-/// identically (enable -> schedule next boundary; disable -> clear). (#51)
-pub fn renewal_marker(
-    auto_renew: bool,
-    time_frame: &str,
-    now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    if auto_renew {
-        Some(next_period_boundary(time_frame, now))
-    } else {
-        None
-    }
-}
-
-/// The half-open `[start, end)` UTC window of the period CONTAINING `now` — i.e.
-/// the CURRENT period — used to source the current period's spend (#52 rollup
-/// aggregation surfaces a parent's combined current-period spend). It is exactly
-/// the gap between the previous-period window's end and the next period boundary,
-/// so it is anchored to the calendar identically to `previous_period_window` /
-/// `next_period_boundary` (monthly/quarterly/yearly; unrecognized -> monthly).
-/// Defined in terms of those two helpers so the three windows can never drift.
-pub fn current_period_window(
-    time_frame: &str,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    // previous_period_window's `end` is the start of the current period; the next
-    // boundary is the start of the following period (the current period's end).
-    let (_, current_start) = previous_period_window(time_frame, now);
-    let current_end = next_period_boundary(time_frame, now);
-    (current_start, current_end)
-}
-
-/// Whether a rollup link `child -> parent` is permitted, given the two budgets'
-/// existing rollup roles (#52). Rollup is SINGLE-LEVEL: a budget is either a
-/// standalone, a parent (has children), or a child (rolled up into a parent) —
-/// never both a parent and a child. This pure guard, combined with the DB
-/// self-link CHECK and the single-level rule, makes rollup cycles structurally
-/// impossible:
-/// - `parent_id == child_id` -> 400 (a budget cannot roll up into itself).
-/// - `parent_is_child` (the prospective parent is itself rolled up into something)
-///   -> 409 (linking under it would create a 2-level chain).
-/// - `child_is_parent` (the prospective child already has its own children) -> 409
-///   (it would become both a parent and a child).
-///
-/// All inputs are derived from the DB by the caller; the guard itself is pure and
-/// unit-tested so the cycle/nesting rules have a single, testable definition.
-pub fn validate_rollup_link(
-    parent_id: Uuid,
-    child_id: Uuid,
-    parent_is_child: bool,
-    child_is_parent: bool,
-    parent_type: &str,
-    child_type: &str,
-    parent_strategy: &str,
-    child_strategy: &str,
-) -> Result<(), (StatusCode, String)> {
-    if parent_id == child_id {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "A budget cannot be rolled up into itself".to_string(),
-        ));
-    }
-    if parent_is_child {
-        return Err((
-            StatusCode::CONFLICT,
-            "The target budget is itself rolled up into another budget; rollup is single-level"
-                .to_string(),
-        ));
-    }
-    if child_is_parent {
-        return Err((
-            StatusCode::CONFLICT,
-            "That budget already has budgets rolled up into it; rollup is single-level".to_string(),
-        ));
-    }
-    // #300: budgets can only be rolled up together when they share the same
-    // budget_type AND the same budget_strategy. Checked after the self-link/
-    // chain-violation guards so those keep priority (same order convention as
-    // this function's other checks).
-    if parent_type != child_type {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "Budgets can only be rolled up together when they share the same budget type \
-                 (the parent is '{parent_type}', the child is '{child_type}'; both must be \
-                 'time_based' or both must be 'project')."
-            ),
-        ));
-    }
-    if parent_strategy != child_strategy {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "Budgets can only be rolled up together when they share the same budgeting \
-                 strategy (the parent is '{parent_strategy}', the child is '{child_strategy}'; \
-                 both must be 'zero_based' or both must be 'limit_spent_remaining')."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Whether an in-place `budget_type` or `budget_strategy` change is allowed on a budget that
-/// participates in a rollup relationship (#317). `validate_rollup_link` (#52/#300) already
-/// rejects LINKING two budgets whose `budget_type` or `budget_strategy` differ; without this
-/// guard, an ordinary edit to an ALREADY-linked budget could silently recreate that exact
-/// mismatch after the link exists (neither REST `update_budget` nor chat's UPDATE_BUDGET
-/// re-checked the rollup relationship before this issue).
-///
-/// `is_child`/`is_parent` describe the budget BEING EDITED's own rollup role, derived from the
-/// DB by the caller (`is_child` = its `rollup_parent_id IS NOT NULL`; `is_parent` = via
-/// `is_rollup_parent`, below). `field_label` is the human label used in the error message
-/// ("budget type" / "budgeting strategy"). Only an ACTUAL change (`requested != current`) is
-/// rejected — resubmitting the budget's current value is always a no-op, mirroring how
-/// re-linking to the SAME parent is idempotent rather than an error (see `link_rollup`) and
-/// how the frontend's `buildEditPatch` already treats an unchanged value as nothing-to-save.
-///
-/// A budget that is a rollup PARENT is blocked from changing its OWN `budget_type`/
-/// `budget_strategy` while it has ANY child (archived or not) — not just when the new value
-/// would conflict with a specific child — because pre-existing rollup links are never
-/// retroactively re-validated (a parent's children are not guaranteed to already agree with
-/// each other), so "does this match child X" is not well-defined for a parent in general.
-/// The same blanket rule applies to a CHILD for symmetry (one rule, one function, one message
-/// shape for both roles).
-pub fn ensure_rollup_type_or_strategy_unchanged(
-    is_child: bool,
-    is_parent: bool,
-    field_label: &str,
-    current: &str,
-    requested: &str,
-) -> Result<(), (StatusCode, String)> {
-    if requested == current || (!is_child && !is_parent) {
-        return Ok(());
-    }
-    let role = if is_child { "child" } else { "parent" };
-    Err((
-        StatusCode::CONFLICT,
-        format!(
-            "Budgets can only be rolled up together when they share the same {field_label}. \
-             This budget is a rollup {role}; changing its {field_label} from '{current}' to \
-             '{requested}' would break that. Unlink it first if you need to change this."
-        ),
-    ))
-}
-
 /// Whether ANY budget (archived or not) is currently rolled up into `budget_id` — i.e.
 /// whether `budget_id` is a rollup PARENT (#317). Extracted from `link_rollup`'s own
 /// `child_is_parent` guard (identical SQL) so `update_budget`, chat's
@@ -1190,47 +785,6 @@ pub async fn is_rollup_parent(
         .fetch_one(pool)
         .await
         .map_err(internal_error)
-}
-
-/// Decide the name for the mirror expense category created in a target budget when
-/// a source budget is rolled up into it (#52). The category is named after the
-/// source budget; if the target already has a category with that name we suffix it,
-/// and if both the plain and suffixed names are taken there is no free name to use.
-///
-/// Comparison against `existing` is case-insensitive, matching how this file treats
-/// budget/category name collisions. Pure (no DB) so both the REST and chat handlers
-/// can share one definition and it stays unit-testable.
-///
-/// - No collision -> the source name verbatim.
-/// - Plain name taken -> `"{source_name} (rolled up)"`.
-/// - Both taken -> 409 CONFLICT.
-pub fn rollup_category_name(
-    source_name: &str,
-    existing: &[String],
-) -> Result<String, (StatusCode, String)> {
-    let collides = |candidate: &str| {
-        existing
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(candidate))
-    };
-
-    if !collides(source_name) {
-        return Ok(source_name.to_string());
-    }
-
-    let suffixed = format!("{} (rolled up)", source_name);
-    if !collides(&suffixed) {
-        return Ok(suffixed);
-    }
-
-    Err((
-        StatusCode::CONFLICT,
-        format!(
-            "The target budget already has categories named \"{}\" and \"{}\"; \
-             rename one before rolling up",
-            source_name, suffixed
-        ),
-    ))
 }
 
 /// A parent budget's AGGREGATED amounts (#52): the parent's own figures PLUS the
@@ -1300,27 +854,6 @@ pub async fn rollup_child_ids(
     .await
     .map_err(internal_error)?;
     Ok(ids)
-}
-
-/// The `[start, end)` spend-window a rollup SOURCE budget contributes through,
-/// keyed off the source's OWN `budget_type` (never the parent's) — a project
-/// source's full lifetime span, or a time_based source's current calendar
-/// period. Shared by `linked_budgets_spent` (the aggregate combined-spend
-/// figure) and `category_table_rows`'s mirror-row resolution (nels#298) so the
-/// two "what window does this source's mirror represent" answers cannot drift
-/// apart.
-fn source_spend_window(
-    budget_type: &str,
-    time_frame: &str,
-    created_at: DateTime<Utc>,
-    closed_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    if budget_type == "project" {
-        project_span(created_at, closed_at, now)
-    } else {
-        current_period_window(time_frame, now)
-    }
 }
 
 /// The total expense SPEND of every source budget mirrored into `parent_id` via a
@@ -3440,38 +2973,6 @@ pub async fn unlink_rollup(
 
 // --- CATEGORY HANDLERS ---
 
-/// The (prev_period_spent, carried_amount) selection shared by the REST
-/// category read path (`category_response_with_carry`) and the categories view
-/// endpoint (`categories_view`, #426), so the two surfaces can never disagree
-/// about a category's effective amount.
-///
-/// Fund precedence (#228): a fund category's carry comes from the materialized
-/// `fund_balance`, NOT the #49 one-period carry — stacking both would
-/// double-count the same accumulated credit. A #52 mirror and any non-expense
-/// category never carry at all.
-pub fn category_carry_for(
-    is_expense: bool,
-    is_linked: bool,
-    is_fund: bool,
-    fund_balance: f64,
-    budget_rollover: bool,
-    rollover_enabled: bool,
-    budget_type: &str,
-    base: f64,
-    prev_spent: f64,
-) -> (f64, f64) {
-    if is_expense && !is_linked && is_fund {
-        (0.0, fund_balance)
-    } else if is_expense && !is_linked {
-        (
-            prev_spent,
-            category_carried(budget_rollover, rollover_enabled, budget_type, base, prev_spent),
-        )
-    } else {
-        (0.0, 0.0)
-    }
-}
-
 /// Build a `CategoryResponse` with computed carry (#49) for a single category.
 /// `prev_spent` is this category's previous-period expense spend (only
 /// meaningful for expense categories; pass 0 otherwise). Non-expense categories
@@ -5560,7 +5061,7 @@ pub async fn advance_fund_categories(db: &PgPool) -> Result<u64, sqlx::Error> {
                 }
             };
 
-            let delta = category_limit - spent;
+            let delta = fund_period_delta(category_limit, spent);
 
             // Guard the UPDATE with the marker equality and `is_fund = TRUE`
             // so a concurrent tick that already advanced this category past
@@ -7069,20 +6570,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_category_type_defaults_keeps_and_falls_back() {
-        // None -> default "expense"
-        assert_eq!(resolve_category_type(None), "expense");
-        // valid types pass through unchanged
-        assert_eq!(resolve_category_type(Some("income")), "income");
-        assert_eq!(resolve_category_type(Some("savings")), "savings");
-        assert_eq!(resolve_category_type(Some("expense")), "expense");
-        // invalid / junk / wrong-case -> fall back to "expense"
-        assert_eq!(resolve_category_type(Some("groceries")), "expense");
-        assert_eq!(resolve_category_type(Some("Expense")), "expense");
-        assert_eq!(resolve_category_type(Some("")), "expense");
-    }
-
-    #[test]
     fn accepts_view_and_edit() {
         assert!(validate_permission_level("view").is_ok());
         assert!(validate_permission_level("edit").is_ok());
@@ -7099,45 +6586,6 @@ mod tests {
         assert!(validate_permission_level("").is_err());
         assert!(validate_permission_level("View").is_err());
         assert!(validate_permission_level("EDIT").is_err());
-    }
-
-    #[test]
-    fn budget_total_is_zero_with_no_categories() {
-        assert_eq!(sum_category_amounts(&[]), 0.0);
-    }
-
-    #[test]
-    fn budget_total_treats_missing_amounts_as_zero() {
-        // A category with no amount counts as 0 in the budget total.
-        assert_eq!(sum_category_amounts(&[None, None]), 0.0);
-        assert_eq!(sum_category_amounts(&[Some(100.0), None]), 100.0);
-    }
-
-    #[test]
-    fn budget_total_sums_category_amounts() {
-        assert_eq!(
-            sum_category_amounts(&[Some(100.0), Some(250.50), None, Some(0.0)]),
-            350.50
-        );
-    }
-
-    #[test]
-    fn resolve_base_amount_fixed_uses_budget_limit() {
-        // 'fixed' reports the stored budget_limit, ignoring the category sum.
-        assert_eq!(resolve_base_amount("fixed", Some(2000.0), 100.0), 2000.0);
-    }
-
-    #[test]
-    fn resolve_base_amount_fixed_null_limit_is_zero() {
-        // A 'fixed' budget with no stored amount reports 0.
-        assert_eq!(resolve_base_amount("fixed", None, 100.0), 0.0);
-    }
-
-    #[test]
-    fn resolve_base_amount_derived_uses_category_sum() {
-        // 'derived' (and any non-'fixed' mode) reports the summed category total.
-        assert_eq!(resolve_base_amount("derived", Some(2000.0), 100.0), 100.0);
-        assert_eq!(resolve_base_amount("derived", None, 100.0), 100.0);
     }
 
     #[test]
@@ -7423,264 +6871,6 @@ mod tests {
     }
 
     #[test]
-    fn current_period_window_is_between_prev_end_and_next_boundary() {
-        // The current period starts where the previous period ends and ends at the
-        // next boundary — anchored identically to the other two window helpers (#52).
-        let now = Utc.with_ymd_and_hms(2026, 6, 18, 12, 0, 0).unwrap();
-        for tf in ["monthly", "quarterly", "yearly", "weekly"] {
-            let (_, prev_end) = previous_period_window(tf, now);
-            let next = next_period_boundary(tf, now);
-            let (cur_start, cur_end) = current_period_window(tf, now);
-            assert_eq!(cur_start, prev_end, "current start == previous end ({tf})");
-            assert_eq!(cur_end, next, "current end == next boundary ({tf})");
-            assert!(cur_start <= now && now < cur_end, "now is inside the current window ({tf})");
-        }
-    }
-
-    #[test]
-    fn carried_zero_when_disabled() {
-        assert_eq!(carried_amount(false, 500.0, 200.0), 0.0);
-        assert_eq!(carried_amount(false, 500.0, 700.0), 0.0);
-    }
-
-    #[test]
-    fn carried_is_unused_remainder_when_enabled() {
-        assert_eq!(carried_amount(true, 500.0, 200.0), 300.0);
-    }
-
-    #[test]
-    fn carried_clamps_overspend_to_zero() {
-        // Overspend (prev_spent > base) does NOT carry as a negative — clamps at 0.
-        assert_eq!(carried_amount(true, 500.0, 700.0), 0.0);
-    }
-
-    #[test]
-    fn carried_zero_when_base_zero() {
-        assert_eq!(carried_amount(true, 0.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn carried_full_base_when_nothing_spent() {
-        assert_eq!(carried_amount(true, 500.0, 0.0), 500.0);
-    }
-
-    // --- category_carried (#49) ---
-
-    #[test]
-    fn category_carried_zero_when_budget_off() {
-        // Budget master switch off -> 0, even with the category opted in.
-        assert_eq!(category_carried(false, true, "time_based", 500.0, 100.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_zero_when_category_off() {
-        assert_eq!(category_carried(true, false, "time_based", 500.0, 100.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_zero_for_project() {
-        // Project budgets are excluded from rollover (#48), regardless of switches.
-        assert_eq!(category_carried(true, true, "project", 500.0, 100.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_clamps_overspend() {
-        // Overspend (700 > 500) clamps to 0, never a negative carry.
-        assert_eq!(category_carried(true, true, "time_based", 500.0, 700.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_zero_base() {
-        assert_eq!(category_carried(true, true, "time_based", 0.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_zero_when_spent_equals_base() {
-        // Exact boundary: nothing left over (base - prev_spent == 0) carries 0.
-        // Guards the .max(0.0) clamp against an off-by-one refactor at equality.
-        assert_eq!(category_carried(true, true, "time_based", 500.0, 500.0), 0.0);
-    }
-
-    #[test]
-    fn category_carried_remainder_when_both_on() {
-        assert_eq!(category_carried(true, true, "time_based", 500.0, 200.0), 300.0);
-    }
-
-    #[test]
-    fn per_category_clamp_differs_from_budget_clamp_on_mixed_over_under() {
-        // A overspent (over by 50), B underspent (under by 60). Per-category clamps
-        // A's overspend to 0 independently, so only B's remainder carries (60).
-        // Budget-level nets the two together: carried_amount(true, 200, 190) = 10.
-        let per_cat = category_carried(true, true, "time_based", 100.0, 150.0)
-            + category_carried(true, true, "time_based", 100.0, 40.0);
-        let budget_level = carried_amount(true, 200.0, 190.0);
-        assert_eq!(per_cat, 60.0);
-        assert_eq!(budget_level, 10.0);
-        assert_ne!(per_cat, budget_level);
-    }
-
-    #[test]
-    fn per_category_equals_budget_when_all_underspent() {
-        // With no overspend anywhere, per-category summation matches budget-level.
-        let per_cat = category_carried(true, true, "time_based", 100.0, 30.0)
-            + category_carried(true, true, "time_based", 200.0, 50.0);
-        let budget_level = carried_amount(true, 300.0, 80.0);
-        assert!((per_cat - budget_level).abs() < 1e-9);
-    }
-
-    // --- category_carry_for (#426) ---
-
-    #[test]
-    fn category_carry_for_fund_beats_rollover() {
-        // #228 precedence: a fund uses fund_balance, never the #49 one-period carry.
-        let (prev, carried) = category_carry_for(true, false, true, 42.0, true, true, "time_based", 100.0, 80.0);
-        assert_eq!(prev, 0.0);
-        assert_eq!(carried, 42.0);
-    }
-
-    #[test]
-    fn category_carry_for_rollover_when_not_fund() {
-        // base 100, prev_spent 80 -> carry 20.
-        let (prev, carried) = category_carry_for(true, false, false, 0.0, true, true, "time_based", 100.0, 80.0);
-        assert_eq!(prev, 80.0);
-        assert_eq!(carried, 20.0);
-    }
-
-    #[test]
-    fn category_carry_for_overspend_clamps_to_zero() {
-        let (_, carried) = category_carry_for(true, false, false, 0.0, true, true, "time_based", 100.0, 150.0);
-        assert_eq!(carried, 0.0);
-    }
-
-    #[test]
-    fn category_carry_for_mirror_is_zero() {
-        // A #52 mirror never carries — it reflects another budget's live total.
-        let (prev, carried) = category_carry_for(true, true, true, 99.0, true, true, "time_based", 100.0, 80.0);
-        assert_eq!(prev, 0.0);
-        assert_eq!(carried, 0.0);
-    }
-
-    #[test]
-    fn category_carry_for_non_expense_is_zero() {
-        let (prev, carried) = category_carry_for(false, false, false, 0.0, true, true, "time_based", 100.0, 80.0);
-        assert_eq!(prev, 0.0);
-        assert_eq!(carried, 0.0);
-    }
-
-    #[test]
-    fn category_carry_for_rollover_off_is_zero() {
-        let (_, carried) = category_carry_for(true, false, false, 0.0, false, true, "time_based", 100.0, 80.0);
-        assert_eq!(carried, 0.0);
-    }
-
-    // Fund categories (#228): effective_limit = category_limit + fund_balance,
-    // no floor. Non-fund categories are unaffected (returns category_limit
-    // unchanged, ignoring whatever fund_balance happens to hold).
-    #[test]
-    fn fund_effective_limit_non_fund_ignores_balance() {
-        assert_eq!(fund_effective_limit(false, 100.0, 9999.0), 100.0);
-    }
-
-    #[test]
-    fn fund_effective_limit_adds_positive_balance() {
-        assert_eq!(fund_effective_limit(true, 100.0, 50.0), 150.0);
-    }
-
-    #[test]
-    fn fund_effective_limit_allows_negative_result() {
-        // Sustained overspend can push the effective limit below zero — no floor.
-        assert_eq!(fund_effective_limit(true, 100.0, -180.0), -80.0);
-    }
-
-    #[test]
-    fn fund_effective_limit_zero_balance_is_plain_limit() {
-        assert_eq!(fund_effective_limit(true, 100.0, 0.0), 100.0);
-    }
-
-    // Reproduces the ticket's worked example exactly (nels#228): a $100
-    // monthly fund category, chained Jan -> Apr. Each period's balance-after
-    // and effective-limit-for-the-NEXT-period must match the ticket's table.
-    #[test]
-    fn fund_worked_example_jan_through_apr() {
-        let limit = 100.0;
-
-        // Jan: spent 50. Effective limit for Jan itself is just the base (no
-        // balance has accrued yet at the start of the fund's first period).
-        let jan_effective = fund_effective_limit(true, limit, 0.0);
-        assert_eq!(jan_effective, 100.0, "Jan effective limit");
-        let balance_after_jan = 0.0 + (limit - 50.0);
-        assert_eq!(balance_after_jan, 50.0, "balance after Jan");
-
-        // Feb: spent 70. Effective limit for Feb reflects Jan's carried balance.
-        let feb_effective = fund_effective_limit(true, limit, balance_after_jan);
-        assert_eq!(feb_effective, 150.0, "Feb effective limit (100 + 50)");
-        let balance_after_feb = balance_after_jan + (limit - 70.0);
-        assert_eq!(balance_after_feb, 80.0, "balance after Feb");
-
-        // Mar: spent 200 (overspend). Effective limit for Mar reflects Feb's
-        // balance; the overspend then drives the balance negative.
-        let mar_effective = fund_effective_limit(true, limit, balance_after_feb);
-        assert_eq!(mar_effective, 180.0, "Mar effective limit (100 + 80)");
-        let balance_after_mar = balance_after_feb + (limit - 200.0);
-        assert_eq!(balance_after_mar, -20.0, "balance after Mar (overspend pushes negative)");
-
-        // Apr: no spend yet. Effective limit for Apr reflects Mar's deficit —
-        // a genuine reduction below the base limit.
-        let apr_effective = fund_effective_limit(true, limit, balance_after_mar);
-        assert_eq!(apr_effective, 80.0, "Apr effective limit (100 - 20)");
-    }
-
-    // CATEGORY_AFFORDABILITY (#302): compares a requested spend amount against a
-    // category's already-resolved effective remaining balance. Pure arithmetic —
-    // callers (rag.rs) are responsible for resolving `effective_limit` (including
-    // the "no limit configured" case) before calling this.
-    #[test]
-    fn evaluate_affordability_affordable_with_room() {
-        // limit 200, spent 80 -> remaining 120; requesting 50 fits with room to spare.
-        let check = evaluate_affordability(50.0, 200.0, 80.0);
-        assert!(check.can_afford);
-        assert_eq!(check.remaining, 120.0);
-        assert_eq!(check.overage, 0.0);
-    }
-
-    #[test]
-    fn evaluate_affordability_affordable_at_exact_boundary() {
-        // remaining is exactly 120; requesting exactly 120 must still be affordable (<=, not <).
-        let check = evaluate_affordability(120.0, 200.0, 80.0);
-        assert!(check.can_afford);
-        assert_eq!(check.remaining, 120.0);
-        assert_eq!(check.overage, 0.0);
-    }
-
-    #[test]
-    fn evaluate_affordability_unaffordable_reports_overage() {
-        // limit 200, spent 160 -> remaining 40; requesting 50 is 10 over.
-        let check = evaluate_affordability(50.0, 200.0, 160.0);
-        assert!(!check.can_afford);
-        assert_eq!(check.remaining, 40.0);
-        assert_eq!(check.overage, 10.0);
-    }
-
-    #[test]
-    fn evaluate_affordability_negative_remaining_from_fund_deficit() {
-        // A fund category already in deficit (effective_limit already negative, e.g. -20 from a
-        // sustained overspend) makes ANY positive request unaffordable, with overage = requested
-        // minus the (negative) remaining.
-        let check = evaluate_affordability(10.0, -20.0, 0.0);
-        assert!(!check.can_afford);
-        assert_eq!(check.remaining, -20.0);
-        assert_eq!(check.overage, 30.0);
-    }
-
-    #[test]
-    fn evaluate_affordability_zero_request_is_always_affordable_unless_already_over() {
-        let check = evaluate_affordability(0.0, 100.0, 100.0);
-        assert!(check.can_afford);
-        assert_eq!(check.remaining, 0.0);
-        assert_eq!(check.overage, 0.0);
-    }
-
-    #[test]
     fn category_response_with_carry_fund_category_reports_fund_balance() {
         let cat = Category {
             id: Uuid::new_v4(),
@@ -7729,55 +6919,6 @@ mod tests {
     }
 
     #[test]
-    fn prev_window_monthly() {
-        let now = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
-        let (s, e) = previous_period_window("monthly", now);
-        assert_eq!(s, Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap());
-        assert_eq!(e, Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn prev_window_monthly_january_crosses_year() {
-        let now = Utc.with_ymd_and_hms(2026, 1, 10, 0, 0, 0).unwrap();
-        let (s, e) = previous_period_window("monthly", now);
-        assert_eq!(s, Utc.with_ymd_and_hms(2025, 12, 1, 0, 0, 0).unwrap());
-        assert_eq!(e, Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn prev_window_yearly() {
-        let now = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
-        let (s, e) = previous_period_window("yearly", now);
-        assert_eq!(s, Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap());
-        assert_eq!(e, Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn prev_window_quarterly_q1_goes_to_prev_q4() {
-        let now = Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap(); // Q1 2026
-        let (s, e) = previous_period_window("quarterly", now);
-        assert_eq!(s, Utc.with_ymd_and_hms(2025, 10, 1, 0, 0, 0).unwrap());
-        assert_eq!(e, Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn prev_window_quarterly_q2_goes_to_q1() {
-        let now = Utc.with_ymd_and_hms(2026, 5, 20, 0, 0, 0).unwrap(); // Q2 2026
-        let (s, e) = previous_period_window("quarterly", now);
-        assert_eq!(s, Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
-        assert_eq!(e, Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn prev_window_unknown_timeframe_falls_back_to_monthly() {
-        let now = Utc.with_ymd_and_hms(2026, 3, 14, 0, 0, 0).unwrap();
-        assert_eq!(
-            previous_period_window("weekly", now),
-            previous_period_window("monthly", now)
-        );
-    }
-
-    #[test]
     fn audit_retention_defaults_when_absent() {
         assert_eq!(parse_audit_retention(None), 365);
     }
@@ -7803,78 +6944,6 @@ mod tests {
     fn audit_retention_parses_valid_value() {
         assert_eq!(parse_audit_retention(Some("180".to_string())), 180);
         assert_eq!(parse_audit_retention(Some("  90 ".to_string())), 90);
-    }
-
-    #[test]
-    fn next_period_boundary_monthly() {
-        // Mid-month -> first of next month.
-        let now = Utc.with_ymd_and_hms(2026, 6, 18, 10, 30, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("monthly", now),
-            Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap()
-        );
-        // December rolls over to January of the next year.
-        let dec = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("monthly", dec),
-            Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
-        );
-    }
-
-    #[test]
-    fn next_period_boundary_quarterly() {
-        // Q2 (Apr-Jun) -> start of Q3 (Jul 1).
-        let q2 = Utc.with_ymd_and_hms(2026, 5, 15, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("quarterly", q2),
-            Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap()
-        );
-        // Q1 (Jan-Mar) -> start of Q2 (Apr 1).
-        let q1 = Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("quarterly", q1),
-            Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap()
-        );
-        // Q4 (Oct-Dec) -> start of Q1 next year (Jan 1).
-        let q4 = Utc.with_ymd_and_hms(2026, 11, 20, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("quarterly", q4),
-            Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
-        );
-    }
-
-    #[test]
-    fn next_period_boundary_yearly() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 18, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("yearly", now),
-            Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
-        );
-    }
-
-    #[test]
-    fn next_period_boundary_unknown_falls_back_to_monthly() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 18, 0, 0, 0).unwrap();
-        assert_eq!(
-            next_period_boundary("weekly", now),
-            next_period_boundary("monthly", now)
-        );
-    }
-
-    #[test]
-    fn renewal_marker_set_when_enabled_cleared_when_disabled() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 18, 0, 0, 0).unwrap();
-        // Disabled -> no marker.
-        assert_eq!(renewal_marker(false, "monthly", now), None);
-        // Enabled -> the next boundary for the timeframe.
-        assert_eq!(
-            renewal_marker(true, "monthly", now),
-            Some(next_period_boundary("monthly", now))
-        );
-        assert_eq!(
-            renewal_marker(true, "yearly", now),
-            Some(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap())
-        );
     }
 
     #[test]
@@ -8234,46 +7303,6 @@ mod tests {
     }
 
     #[test]
-    fn project_never_carries() {
-        // Project budgets are excluded from rollover even when enabled with a
-        // positive unused remainder.
-        assert_eq!(effective_carried("project", true, 500.0, 200.0), 0.0);
-    }
-
-    #[test]
-    fn time_based_enabled_delegates_to_carried_amount() {
-        assert_eq!(
-            effective_carried("time_based", true, 500.0, 200.0),
-            carried_amount(true, 500.0, 200.0)
-        );
-        assert_eq!(effective_carried("time_based", true, 500.0, 200.0), 300.0);
-    }
-
-    #[test]
-    fn time_based_disabled_carries_zero() {
-        assert_eq!(effective_carried("time_based", false, 500.0, 200.0), 0.0);
-    }
-
-    #[test]
-    fn project_span_open_ends_at_now() {
-        let created = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 6, 17, 12, 0, 0).unwrap();
-        let (start, end) = project_span(created, None, now);
-        assert_eq!(start, created);
-        assert_eq!(end, now);
-    }
-
-    #[test]
-    fn project_span_closed_ends_at_closed_at() {
-        let created = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let closed = Utc.with_ymd_and_hms(2026, 3, 15, 0, 0, 0).unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 6, 17, 12, 0, 0).unwrap();
-        let (start, end) = project_span(created, Some(closed), now);
-        assert_eq!(start, created);
-        assert_eq!(end, closed);
-    }
-
-    #[test]
     fn archive_filter_defaults_to_active_only() {
         // Absent/None query -> default to active budgets only (want_archived false).
         let q = ListBudgetsQuery::default();
@@ -8301,15 +7330,6 @@ mod tests {
         // Archived rows match; active rows do not.
         assert!(matches_archive_filter(true, want));
         assert!(!matches_archive_filter(false, want));
-    }
-
-    #[test]
-    fn higher_share_level_picks_edit_over_view_regardless_of_order() {
-        // "edit" > "view" by privilege, NOT lexically (lexically "edit" < "view").
-        assert_eq!(higher_share_level("view", "edit"), "edit");
-        assert_eq!(higher_share_level("edit", "view"), "edit");
-        assert_eq!(higher_share_level("view", "view"), "view");
-        assert_eq!(higher_share_level("edit", "edit"), "edit");
     }
 
     // --- Auto-renew DB-backed tests (#51) ---

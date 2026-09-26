@@ -2124,4 +2124,33 @@ mod tests {
         assert_eq!(p.assumptions.mc_paths, MC_DEFAULT_PATHS);
         assert_eq!(p.assumptions.mc_sigma, MC_REAL_RETURN_STD_DEV);
     }
+
+    /// Cross-target pin (spec savvagent/nels-oss#5, R3). The backend (native)
+    /// and a Wasm client must agree on the headline and the band for the same
+    /// inputs. Values captured natively on 2026-09-25; tolerance is relative
+    /// 1e-6 because libm's exp/ln may differ in the last bit across targets.
+    #[test]
+    fn standard_fixture_agrees_across_targets() {
+        const HEADLINE: f64 = 3651.4399499955;
+        const P10: f64 = 1494.1074794971;
+        const P50: f64 = 3186.1416956076;
+        const P90: f64 = 5790.8750842254;
+        const SUCCESS: f64 = 0.0800000000;
+
+        let p = run_projection(&test_request()).unwrap();
+        eprintln!(
+            "PIN headline={:.10} p10={:.10} p50={:.10} p90={:.10} success={:.10}",
+            p.deterministic_monthly_income, p.percentile_band.p10,
+            p.percentile_band.p50, p.percentile_band.p90, p.success_rate
+        );
+
+        fn close(a: f64, b: f64) -> bool {
+            (a - b).abs() <= 1e-6 * b.abs().max(1.0)
+        }
+        assert!(close(p.deterministic_monthly_income, HEADLINE), "{}", p.deterministic_monthly_income);
+        assert!(close(p.percentile_band.p10, P10), "{}", p.percentile_band.p10);
+        assert!(close(p.percentile_band.p50, P50), "{}", p.percentile_band.p50);
+        assert!(close(p.percentile_band.p90, P90), "{}", p.percentile_band.p90);
+        assert!(close(p.success_rate, SUCCESS), "{}", p.success_rate);
+    }
 }
