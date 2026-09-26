@@ -49,7 +49,8 @@ mod assets;
 mod retirement;
 // Pure domain rule, moved to nels-core (spec savvagent/nels-oss#5).
 use nels_core::social_security;
-mod retirement_projection;
+// Pure domain rule, moved to nels-core (spec savvagent/nels-oss#5).
+use nels_core::retirement_projection;
 mod plaid_investments;
 mod mcp;
 

@@ -13,7 +13,7 @@ use crate::error::internal_error;
 // Re-exported so existing `crate::retirement::…` paths keep resolving.
 // Add NEW pure rules to core/, not here.
 pub use nels_core::retirement::{
-    current_age, employer_match, resolve_input, retirement_supported_country,
+    resolve_input, retirement_supported_country,
     social_security_view, stale_defaulted_age_warning, validate_profile, EmployerMatch,
     RetirementProfile, RetirementProfileInput, SocialSecurityView, SsAnchor,
     StoredEmployerMatch, MISSING_REQUIRED_FIELD_SUFFIX, NO_PROFILE_MESSAGE,

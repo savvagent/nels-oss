@@ -10,4 +10,5 @@
 
 pub mod error;
 pub mod retirement;
+pub mod retirement_projection;
 pub mod social_security;
