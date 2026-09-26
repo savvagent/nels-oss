@@ -50,7 +50,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Decide which of the three suites need to run for this event.
+  # Decide which of the four suites need to run for this event.
   #
   # There is no pnpm workspace in this repo — each app keeps its own
   # pnpm-lock.yaml deliberately, so that each Cloudflare Pages build stays
@@ -63,16 +63,17 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       marketing: ${{ steps.filter.outputs.marketing }}
       backend: ${{ steps.filter.outputs.backend }}
+      core: ${{ steps.filter.outputs.core }}
     steps:
       # CRITICAL — this MUST stay a SINGLE step with a SINGLE id that branches
-      # internally on the event name, and that writes all three outputs on BOTH
+      # internally on the event name, and that writes all outputs on BOTH
       # branches. Do NOT split it into a push-step and a pull_request-step with
       # different ids gated by `if:`.
       #
       # Why: a skipped step still resolves through steps.<id>.outputs.*, but it
       # contributes EMPTY STRINGS. With two gated steps, whichever one did not
-      # run would blank out all three job outputs, every downstream
-      # `if: ... == 'true'` gate would evaluate false, all three suites would
+      # run would blank out all job outputs, every downstream
+      # `if: ... == 'true'` gate would evaluate false, all four suites would
       # skip, and the aggregate `ci` job below would happily report GREEN. That
       # is precisely the silently-disappearing-gate failure this workflow was
       # written to remove, so reintroducing it here would be self-defeating.
@@ -106,6 +107,7 @@ jobs:
             frontend=true
             marketing=true
             backend=true
+            core=true
           else
             # Note: --paginate on this endpoint tops out at 3000 files. That is an
             # accepted residual risk — a pull request that large is pathological,
@@ -120,7 +122,7 @@ jobs:
             # CRITICAL — an EMPTY file list must never be read as "no suites to
             # run". `jq`'s `.[]` over an empty array emits nothing and exits 0,
             # so a successful-but-empty API response would otherwise set all
-            # three outputs false, skip all three suites, and let the aggregate
+            # outputs false, skip every suite, and let the aggregate
             # `ci` job report GREEN having executed zero tests. That is the same
             # bug class the type-check ratchet below refuses to commit when its
             # summary line is missing, and it gets the same treatment: fail loud.
@@ -141,9 +143,16 @@ jobs:
             if grep -q '^frontend/'  <<<"$files"; then frontend=true;  else frontend=false;  fi
             if grep -q '^marketing/' <<<"$files"; then marketing=true; else marketing=false; fi
             if grep -q '^backend/'   <<<"$files"; then backend=true;   else backend=false;   fi
+            if grep -q '^core/'      <<<"$files"; then core=true;      else core=false;      fi
 
-            # A change to this workflow forces all three suites on. Without this,
-            # the workflow could never validate itself — least of all on the very
+            # The backend compiles against core/, and its image is built from the
+            # repo root with backend/Dockerfile + .dockerignore, so a change to any
+            # of those must run the backend suite too.
+            if [ "$core" = true ]; then backend=true; fi
+            if grep -qE '^(backend/Dockerfile|\.dockerignore)$' <<<"$files"; then backend=true; fi
+
+            # A change to this workflow forces all suites on. Without this, the
+            # workflow could never validate itself — least of all on the very
             # pull request that introduces it, which touches no app directory at
             # all and would otherwise run nothing.
             if grep -q '^\.github/workflows/ci\.yml$' <<<"$files"; then
@@ -151,12 +160,13 @@ jobs:
               frontend=true
               marketing=true
               backend=true
+              core=true
             fi
           fi
 
           # Note: admin/ is deliberately NOT detected here. admin/package.json has
           # no `test` script, so there is no suite to run, and a PR touching only
-          # admin/ correctly skips all three. This is intentional, not an oversight.
+          # admin/ correctly skips every suite. This is intentional, not an oversight.
           #
           # Known limitation: only `filename` is inspected, not
           # `previous_filename`, so a file MOVED OUT of frontend/ into a
@@ -165,8 +175,9 @@ jobs:
           echo "frontend=$frontend"   >> "$GITHUB_OUTPUT"
           echo "marketing=$marketing" >> "$GITHUB_OUTPUT"
           echo "backend=$backend"     >> "$GITHUB_OUTPUT"
+          echo "core=$core"           >> "$GITHUB_OUTPUT"
 
-          echo "Selected suites: frontend=$frontend marketing=$marketing backend=$backend"
+          echo "Selected suites: frontend=$frontend marketing=$marketing backend=$backend core=$core"
 
   # The four setup actions mirror .github/workflows/deploy-frontend.yml exactly.
   # Its remaining Pages-deploy steps are replaced by the repo's documented gates.
@@ -357,7 +368,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock', 'core/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -392,10 +403,59 @@ jobs:
           set -euo pipefail
           cargo test --bin backend
 
+  # nels-core: the pure domain rules (spec savvagent/nels-oss#5). Proves three
+  # things the backend suite cannot: the crate builds for the browser target,
+  # its tests give the same answers inside a Wasm VM, and no I/O crate or call
+  # has crept in (scripts/check-purity.sh).
+  core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/target
+          key: ${{ runner.os }}-core-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-core-
+
+      - name: Add Wasm targets
+        run: rustup target add wasm32-unknown-unknown wasm32-wasip1
+
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+
+      - name: Unit tests (native)
+        run: cargo test
+
+      # The optional feature the backend enables must also build on its own;
+      # the backend build alone would hide a missing sqlx feature via unification.
+      - name: Check the sqlx feature
+        run: cargo check --features sqlx
+
+      - name: Build for the browser target
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Unit tests inside a Wasm VM
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo test --target wasm32-wasip1
+
+      - name: Purity gate
+        run: ./scripts/check-purity.sh
+
   # Aggregate gate. This is the ONE job to treat as the overall CI verdict.
   #
   # Why it has to exist: with `needs:` plus a plain `if:`, a FAILED `changes` job
-  # leaves the three suite jobs SKIPPED, and GitHub treats a skipped job as
+  # leaves every suite job SKIPPED, and GitHub treats a skipped job as
   # SATISFYING a required status check. Reading the suite jobs individually would
   # therefore let a broken `changes` job wave everything through green —
   # reproducing exactly the silently-disappearing-gate failure this ticket exists
@@ -412,7 +472,7 @@ jobs:
   # improvement over nothing running at all, but do not over-claim it.
   ci:
     if: always()
-    needs: [changes, frontend, marketing, backend]
+    needs: [changes, frontend, marketing, backend, core]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -431,9 +491,11 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           MARKETING_RESULT: ${{ needs.marketing.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
+          CORE_RESULT: ${{ needs.core.result }}
           WANT_FRONTEND: ${{ needs.changes.outputs.frontend }}
           WANT_MARKETING: ${{ needs.changes.outputs.marketing }}
           WANT_BACKEND: ${{ needs.changes.outputs.backend }}
+          WANT_CORE: ${{ needs.changes.outputs.core }}
         run: |
           set -euo pipefail
 
@@ -449,7 +511,8 @@ jobs:
             "changes:$CHANGES_RESULT" \
             "frontend:$FRONTEND_RESULT" \
             "marketing:$MARKETING_RESULT" \
-            "backend:$BACKEND_RESULT"
+            "backend:$BACKEND_RESULT" \
+            "core:$CORE_RESULT"
           do
             job="${entry%%:*}"
             result="${entry#*:}"
@@ -466,15 +529,16 @@ jobs:
 
           # A `skipped` suite is accepted above, which is correct but is also the
           # one way this gate could be hollowed out: any future edit that lets the
-          # `changes` job exit 0 while emitting BLANK outputs would skip all three
-          # suites and report green. That job spends twenty lines warning against
+          # `changes` job exit 0 while emitting BLANK outputs would skip every
+          # suite and report green. That job spends twenty lines warning against
           # exactly this, so assert it here rather than trusting the prose. Only
           # meaningful when `changes` itself succeeded.
           if [ "$CHANGES_RESULT" = "success" ]; then
             for entry in \
               "frontend:$WANT_FRONTEND" \
               "marketing:$WANT_MARKETING" \
-              "backend:$WANT_BACKEND"
+              "backend:$WANT_BACKEND" \
+              "core:$WANT_CORE"
             do
               job="${entry%%:*}"
               want="${entry#*:}"
