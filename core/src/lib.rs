@@ -8,6 +8,7 @@
 //! `clock` feature enforce this; see AGENTS.md §28.
 #![forbid(unsafe_code)]
 
+pub mod assets;
 pub mod error;
 pub mod retirement;
 pub mod retirement_projection;
