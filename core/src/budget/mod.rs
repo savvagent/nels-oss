@@ -3,3 +3,4 @@
 
 pub mod money;
 pub mod period;
+pub mod rules;
