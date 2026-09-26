@@ -10,6 +10,7 @@
 
 pub mod assets;
 pub mod bank_provider;
+pub mod budget;
 pub mod entitlement;
 pub mod error;
 pub mod retirement;
