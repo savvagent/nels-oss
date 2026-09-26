@@ -4,7 +4,7 @@
 // Pure domain rules live in nels-core (core/, spec savvagent/nels-oss#5).
 // Re-exported so existing `crate::entitlement::…` paths keep resolving.
 // Add NEW pure rules to core/, not here.
-pub use nels_core::entitlement::*;
+pub use nels_core::entitlement::{resolve, Entitlement, PriceCatalog, Tier};
 
 /// Reads the four Stripe price env vars once. Moved verbatim from the former
 /// `PriceCatalog::from_env` (an inherent method can't live outside core).

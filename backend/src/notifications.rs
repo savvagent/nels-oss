@@ -14,7 +14,7 @@ use crate::db::{Notification, Reminder};
 use crate::error::{internal_error, internal_error_message, INTERNAL_ERROR_MESSAGE};
 
 // Pure domain rules live in nels-core (core/, spec savvagent/nels-oss#5).
-// Re-exported so existing `crate::<module>::…` paths keep resolving.
+// Re-exported so existing `crate::notifications::…` paths keep resolving.
 // Add NEW pure rules to core/, not here.
 pub use nels_core::notifications::{advance, limit_level, stale_limit_keys, LimitKey, LimitLevel};
 

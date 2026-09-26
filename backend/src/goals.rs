@@ -14,7 +14,7 @@ use crate::db::{Goal, GoalContribution};
 use crate::error::{internal_error, internal_error_message};
 
 // Pure domain rules live in nels-core (core/, spec savvagent/nels-oss#5).
-// Re-exported so existing `crate::<module>::…` paths keep resolving.
+// Re-exported so existing `crate::goals::…` paths keep resolving.
 // Add NEW pure rules to core/, not here.
 pub use nels_core::goals::{goal_percent, monthly_needed};
 

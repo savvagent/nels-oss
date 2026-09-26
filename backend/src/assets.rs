@@ -40,7 +40,7 @@ use crate::auth::AppState;
 use crate::error::internal_error;
 
 // Pure domain rules live in nels-core (core/, spec savvagent/nels-oss#5).
-// Re-exported so existing `crate::<module>::…` paths keep resolving.
+// Re-exported so existing `crate::assets::…` paths keep resolving.
 // Add NEW pure rules to core/, not here.
 pub use nels_core::assets::{AssetType, HoldingValue, SecurityType, TaxTreatment};
 
