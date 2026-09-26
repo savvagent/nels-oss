@@ -9,3 +9,4 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod social_security;

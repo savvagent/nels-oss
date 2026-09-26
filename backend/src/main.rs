@@ -47,7 +47,8 @@ mod entitlement;
 mod access;
 mod assets;
 mod retirement;
-mod social_security;
+// Pure domain rule, moved to nels-core (spec savvagent/nels-oss#5).
+use nels_core::social_security;
 mod retirement_projection;
 mod plaid_investments;
 mod mcp;
