@@ -13,6 +13,8 @@ pub mod bank_provider;
 pub mod budget;
 pub mod entitlement;
 pub mod error;
+pub mod goals;
+pub mod notifications;
 pub mod retirement;
 pub mod retirement_projection;
 pub mod social_security;
