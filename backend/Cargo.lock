@@ -230,6 +230,7 @@ dependencies = [
  "hex",
  "hmac",
  "jsonwebtoken",
+ "nels-core",
  "rand 0.8.6",
  "rand_distr",
  "reqwest",
@@ -1497,6 +1498,20 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
+]
+
+[[package]]
+name = "nels-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rand 0.8.6",
+ "rand_distr",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

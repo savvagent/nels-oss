@@ -1,0 +1,31 @@
+[package]
+name = "nels-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+description = "Nels's pure domain rules: no I/O, no clock, no entropy. Runs in the backend and compiles to Wasm."
+
+# DEPENDENCY ALLOWLIST (spec savvagent/nels-oss#5, A5). Adding anything here
+# needs a reason in the PR. Feature choices are load-bearing:
+# - chrono without `clock`: Utc::now() does not exist, so "no clock" is a
+#   compile error, not a review rule.
+# - uuid without `v4`, rand/rand_distr without `std`: no getrandom, which does
+#   not build on wasm32-unknown-unknown. The projection is seeded
+#   (StdRng::seed_from_u64) and needs no entropy.
+# - tracing is a facade; the subscriber (and so all output) lives in the backend.
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
+uuid = { version = "1.8", features = ["serde"] }
+rand = { version = "0.8", default-features = false, features = ["std_rng", "alloc"] }
+rand_distr = { version = "0.4", default-features = false, features = ["std_math"] }
+tracing = "0.1"
+# Only for the derives on AssetType/TaxTreatment/RetirementProfile (A7). MUST
+# stay on the backend's sqlx line (0.7) or the derives stop satisfying the
+# backend's traits.
+sqlx = { version = "0.7", optional = true, default-features = false, features = ["postgres", "chrono", "uuid", "json", "macros"] }
+
+[features]
+sqlx = ["dep:sqlx"]
