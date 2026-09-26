@@ -614,7 +614,7 @@ mod tests {
     /// `trialing` -- not `active` -- on purpose. `entitlement::resolve`
     /// returns `Tier::Pro` for `trialing` and returns it BEFORE the price
     /// catalog is consulted at all. With `active` the tier would come from
-    /// `PriceCatalog::from_env()`, where an absent/unrecognized `price_id`
+    /// `price_catalog_from_env()`, where an absent/unrecognized `price_id`
     /// fails safe to `Tier::Basic` -- below Pro -- and the handler would 402.
     /// Short-circuiting ahead of the catalog also means a concurrent
     /// `STRIPE_PRICE_*` env mutation in another test cannot change our

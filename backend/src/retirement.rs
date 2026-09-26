@@ -799,7 +799,7 @@ mod db_tests {
     /// Seed `user` as a Pro subscriber for the handler-level tests.
     ///
     /// CRITICAL — the status MUST be `trialing`, not `active`. Do not "fix" this.
-    /// `require_caller_tier` reads `PriceCatalog::from_env()`, and
+    /// `require_caller_tier` reads `price_catalog_from_env()`, and
     /// `STRIPE_PRICE_PRO_MONTHLY` / `STRIPE_PRICE_PRO_ANNUAL` are unset in the
     /// test process, so `tier_for()` returns `None` and an `active` row fails
     /// safe to `Tier::Basic` — a seeded "Pro" user would still get a 402.

@@ -9,6 +9,8 @@
 #![forbid(unsafe_code)]
 
 pub mod assets;
+pub mod bank_provider;
+pub mod entitlement;
 pub mod error;
 pub mod retirement;
 pub mod retirement_projection;

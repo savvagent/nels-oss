@@ -34,7 +34,8 @@ mod llm_eval;
 mod backfill;
 mod billing;
 mod financial_connections;
-mod bank_provider;
+// Pure domain rule, moved to nels-core (spec savvagent/nels-oss#5).
+use nels_core::bank_provider;
 mod gocardless;
 mod belvo;
 mod basiq;

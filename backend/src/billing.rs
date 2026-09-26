@@ -393,7 +393,7 @@ pub(crate) async fn ensure_ready_to_own_budget(
     }
     // Has a subscription history: entitled → allow; lapsed → block.
     let ent = crate::entitlement::resolve(status.as_deref(), price_id.as_deref(),
-        &crate::entitlement::PriceCatalog::from_env());
+        &crate::entitlement::price_catalog_from_env());
     if ent.tier == crate::entitlement::Tier::None {
         return Err((StatusCode::PAYMENT_REQUIRED,
             "Your subscription ended — resubscribe to create a budget.".to_string()));
@@ -542,7 +542,7 @@ pub async fn get_subscription(
     let row = sqlx::query_as::<_, crate::db::Subscription>(
         "SELECT * FROM subscriptions WHERE user_id = $1")
         .bind(user_id).fetch_optional(&state.db).await.map_err(internal_error)?;
-    let catalog = crate::entitlement::PriceCatalog::from_env();
+    let catalog = crate::entitlement::price_catalog_from_env();
     Ok(Json(match row {
         Some(s) => build_subscription_response(
             s.status, s.price_id, s.current_period_end, s.cancel_at_period_end, &catalog),
